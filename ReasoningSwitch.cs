@@ -16,6 +16,7 @@ internal static class ReasoningSwitch
     [DllImport("user32.dll")] private static extern IntPtr GetForegroundWindow();
     [DllImport("user32.dll")] private static extern short GetAsyncKeyState(int key);
     [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint pid);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetClassName(IntPtr hwnd, StringBuilder name, int count);
     [DllImport("user32.dll")] private static extern bool SetProcessDpiAwarenessContext(IntPtr context);
     [DllImport("user32.dll")] private static extern bool SetCursorPos(int x, int y);
     [DllImport("user32.dll")] private static extern bool GetCursorPos(out System.Drawing.Point point);
@@ -27,7 +28,7 @@ internal static class ReasoningSwitch
     private static System.Windows.Rect chatInputWindowBounds = System.Windows.Rect.Empty;
     private static StringBuilder trace = new StringBuilder();
     private static Stopwatch operationTimer = Stopwatch.StartNew();
-    private const string BuildName = "23-input-focus-hotkey";
+    private const string BuildName = "24-foreground-wait";
     // Anchored: sidebar session titles may also contain the model name.
     private const string ClaudeModelPattern = @"^\s*(?:(?:Model|모델)\s*:?\s*(?:Claude\s+)?Opus\s+5\.5\b|(?:Claude\s+)?Opus\s+5\.5\s*$)";
     // Not ListItem: Claude's Chat tab exposes conversation text as list items.
@@ -121,7 +122,62 @@ internal static class ReasoningSwitch
     }
     private static void EnsureForeground()
     {
-        if (GetForegroundWindow() != targetWindow) throw new InvalidOperationException("Active app changed; operation stopped.");
+        IntPtr other;
+        long away = ForegroundAway(delegate { return GetForegroundWindow(); }, targetWindow,
+            delegate { return operationTimer.ElapsedMilliseconds; }, delegate { Thread.Sleep(5); }, out other);
+        if (away == 0) return;
+        if (away < 0) throw new InvalidOperationException("Active app changed; operation stopped. Foreground: " + DescribeWindow(other));
+        trace.AppendLine("Foreground left for " + away + " ms: " + DescribeWindow(other));
+    }
+    // An activation in progress can leave the foreground empty or on another
+    // window for a moment. Wait briefly for the target to return; nothing is
+    // clicked while another window is in front. Returns 0 if the target never
+    // left, the time away if it returned, and -1 if it did not return.
+    private static long ForegroundAway(Func<IntPtr> read, IntPtr target, Func<long> elapsed, Action poll, out IntPtr other)
+    {
+        other = IntPtr.Zero;
+        IntPtr current = read();
+        if (current == target) return 0;
+        long started = elapsed();
+        do
+        {
+            other = current;
+            if (elapsed() - started >= 300) return -1;
+            poll();
+            current = read();
+        } while (current != target);
+        return Math.Max(1, elapsed() - started);
+    }
+    private static string DescribeWindow(IntPtr hwnd)
+    {
+        if (hwnd == IntPtr.Zero) return "none";
+        // Process and window class only; a title can contain chat or file names.
+        string process = "unknown";
+        try { uint pid; GetWindowThreadProcessId(hwnd, out pid); process = Process.GetProcessById((int)pid).ProcessName; } catch { }
+        StringBuilder name = new StringBuilder(256);
+        GetClassName(hwnd, name, name.Capacity);
+        return "process=" + process + ", class=" + name;
+    }
+    private static void ForegroundSelfTest()
+    {
+        // Replay a steady target, a brief empty foreground, a brief other
+        // window, and a window that stays in front, without any real window.
+        IntPtr target = new IntPtr(1), stranger = new IntPtr(7);
+        for (int scenario = 0; scenario < 4; scenario++)
+        {
+            long clock = 0;
+            int test = scenario;
+            IntPtr other;
+            long away = ForegroundAway(delegate
+            {
+                if (test == 0 || (test != 3 && clock >= 100)) return target;
+                return test == 1 ? IntPtr.Zero : stranger;
+            }, target, delegate { return clock; }, delegate { clock += 5; }, out other);
+            bool passed = test == 0 ? away == 0 && clock == 0 :
+                test == 3 ? away == -1 && clock >= 300 && other == stranger :
+                away == 100 && other == (test == 1 ? IntPtr.Zero : stranger);
+            if (!passed) throw new InvalidOperationException("Foreground wait regression failed: scenario " + test);
+        }
     }
     private static AutomationElement[] Elements(AutomationElement root, ControlType type)
     {
@@ -1243,6 +1299,7 @@ internal static class ReasoningSwitch
     {
         StrokesImageSearch.SelfTest();
         GptFocusSelfTest();
+        ForegroundSelfTest();
         // Protect the final click from search fields, off-window edits and popup overlap.
         System.Windows.Rect testWindow = new System.Windows.Rect(0, 0, 1000, 900);
         System.Windows.Rect testInput = new System.Windows.Rect(200, 600, 600, 100);

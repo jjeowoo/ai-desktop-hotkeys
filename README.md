@@ -99,6 +99,7 @@ Claude의 모델·추론 버튼을 한 번의 접근성 조회에서 찾습니�
 - `last-action*.txt`: 최근 실행의 단계·소요 시간·포커스 결과, 접근성 조회·이미지 검색·캡처별 시간
 - `last-diagnostic*.txt`: 오류 발생 시 모델·추론 컨트롤 정보. 대화 내용이 목록 항목으로 노출되는 화면이 있어 목록 항목은 기록하지 않습니다.
 - `chat-input-*.txt`: 같은 창에서 재사용하는 창·프로세스 번호와 입력란 위치
+- `selftest-error.txt`: `--selftest`가 예외로 실패했을 때의 오류 내용
 - `StrokesPlus.before-*.json`: 설치 전 개인 설정 백업
 
 이름에 `-chatgpt`, `-claude`가 붙은 파일은 앱별 최근 기록입니다.

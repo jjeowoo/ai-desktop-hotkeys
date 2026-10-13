@@ -135,6 +135,18 @@ internal static class ClaudeImageSlider
         }
         return true;
     }
+    // Numbers only, for the diagnostic file: no pixels or text are kept.
+    internal static string DescribeMiss(IntPtr hwnd)
+    {
+        Point origin, windowOrigin;
+        using (Bitmap capture = Capture(hwnd, true, out origin, out windowOrigin))
+        {
+            object near = StrokesImageSearch.TolerantMatch(RuntimeNeedle(), capture, 48);
+            return "window=" + capture.Width + "x" + capture.Height + ", search area=" + runtimeSearchArea +
+                ", nearest anchor=" + (near == null ? "none within 48 levels" : ((Point)near).X + "," + ((Point)near).Y +
+                " differing by " + StrokesImageSearch.ClosestDifference + " levels");
+        }
+    }
     internal static bool IsPopupVisible(IntPtr hwnd)
     {
         Point origin, anchor;

@@ -19,6 +19,7 @@ internal static class StrokesImageSearch
             " ms; captures whole=" + wholeCaptures + ", local=" + localCaptures + ", time=" + captureMilliseconds + " ms." +
             (closestDifference < 0 ? "" : " Tolerant anchor hits=" + tolerantHits + ", closest difference=" + closestDifference + "."); }
     }
+    internal static int ClosestDifference { get { return closestDifference; } }
     internal static void RecordCapture(bool fullWindow, long milliseconds)
     {
         if (fullWindow) wholeCaptures++; else localCaptures++;

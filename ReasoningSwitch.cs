@@ -28,7 +28,7 @@ internal static class ReasoningSwitch
     private static System.Windows.Rect chatInputWindowBounds = System.Windows.Rect.Empty;
     private static StringBuilder trace = new StringBuilder();
     private static Stopwatch operationTimer = Stopwatch.StartNew();
-    private const string BuildName = "25-claude-popup-close";
+    private const string BuildName = "26-slider-miss-details";
     // Anchored: sidebar session titles may also contain the model name.
     private const string ClaudeModelPattern = @"^\s*(?:(?:Model|모델)\s*:?\s*(?:Claude\s+)?Opus\s+5\.5\b|(?:Claude\s+)?Opus\s+5\.5\s*$)";
     // Not ListItem: Claude's Chat tab exposes conversation text as list items.
@@ -474,6 +474,7 @@ internal static class ReasoningSwitch
                 }
                 Thread.Sleep(25);
             } while (openTimer.ElapsedMilliseconds < 1600);
+            try { trace.AppendLine("Slider image miss: trigger=" + triggerBounds + ", " + ClaudeImageSlider.DescribeMiss(targetWindow)); } catch { }
             throw new InvalidOperationException("Claude's slider image was not found; no click sent. Check theme and display scale.");
         }, true);
         // Confirm the change before dismissing the popup and restoring the composer.

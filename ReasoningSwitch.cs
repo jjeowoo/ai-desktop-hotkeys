@@ -28,7 +28,7 @@ internal static class ReasoningSwitch
     private static System.Windows.Rect chatInputWindowBounds = System.Windows.Rect.Empty;
     private static StringBuilder trace = new StringBuilder();
     private static Stopwatch operationTimer = Stopwatch.StartNew();
-    private const string BuildName = "24-foreground-wait";
+    private const string BuildName = "25-claude-popup-close";
     // Anchored: sidebar session titles may also contain the model name.
     private const string ClaudeModelPattern = @"^\s*(?:(?:Model|모델)\s*:?\s*(?:Claude\s+)?Opus\s+5\.5\b|(?:Claude\s+)?Opus\s+5\.5\s*$)";
     // Not ListItem: Claude's Chat tab exposes conversation text as list items.
@@ -879,6 +879,10 @@ internal static class ReasoningSwitch
         string metadata = element.Current.AutomationId + " " + element.Current.ClassName;
         if (Regex.IsMatch(metadata, @"prompt-textarea|chat[-_]?input|composer|prosemirror", RegexOptions.IgnoreCase)) return true;
         if (chatInputBounds.IsEmpty || targetRoot == null) return false;
+        // Claude's effort popup opens over a tall composer, so its slider thumb
+        // lies inside the input's bounds without being a text entry.
+        ControlType type = element.Current.ControlType;
+        if (type != ControlType.Document && type != ControlType.Custom && type != ControlType.Pane) return false;
         System.Windows.Rect window = targetRoot.Current.BoundingRectangle;
         System.Windows.Rect expected = chatInputBounds;
         expected.Offset(window.X - chatInputWindowBounds.X, window.Y - chatInputWindowBounds.Y);
@@ -1045,7 +1049,10 @@ internal static class ReasoningSwitch
         try
         {
             EnsureForeground();
-            if (TextEntryFocused())
+            // Focus alone must never skip dismissing a visible slider popup.
+            bool sliderOpen = !claudeMenuFlow && ClaudeImageSlider.IsPopupVisible(targetWindow);
+            if (sliderOpen) trace.AppendLine("Claude effort popup still open; dismissing it with the input click.");
+            if (!sliderOpen && TextEntryFocused())
             {
                 focused = ChatInputFocused();
                 trace.AppendLine("Text entry already focused; no extra click sent.");
@@ -1063,7 +1070,7 @@ internal static class ReasoningSwitch
                     {
                         ClickPoint(delegate
                         {
-                            if (TextEntryFocused()) throw new OperationCanceledException("Input already focused; no extra click sent.");
+                            if (!sliderOpen && TextEntryFocused()) throw new OperationCanceledException("Input already focused; no extra click sent.");
                             System.Windows.Rect currentWindow = targetRoot.Current.BoundingRectangle;
                             if (Math.Abs(currentWindow.Width - window.Width) > 1 || Math.Abs(currentWindow.Height - window.Height) > 1)
                                 throw new OperationCanceledException("Window resized before input focus; no click sent.");

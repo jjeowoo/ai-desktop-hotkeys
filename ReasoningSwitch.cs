@@ -21,6 +21,7 @@ internal static class ReasoningSwitch
     [DllImport("user32.dll")] private static extern bool SetCursorPos(int x, int y);
     [DllImport("user32.dll")] private static extern bool GetCursorPos(out System.Drawing.Point point);
     [DllImport("user32.dll")] private static extern void mouse_event(uint flags, uint dx, uint dy, uint data, UIntPtr extraInfo);
+    [DllImport("user32.dll")] private static extern bool SetForegroundWindow(IntPtr hwnd);
     [DllImport("user32.dll")] private static extern void keybd_event(byte key, byte scan, uint flags, UIntPtr extraInfo);
     private static IntPtr targetWindow;
     private static string app = "";
@@ -29,7 +30,7 @@ internal static class ReasoningSwitch
     private static System.Windows.Rect chatInputWindowBounds = System.Windows.Rect.Empty;
     private static StringBuilder trace = new StringBuilder();
     private static Stopwatch operationTimer = Stopwatch.StartNew();
-    private const string BuildName = "32-mouse-free-chat-tab";
+    private const string BuildName = "34-type-ahead";
     // Anchored: sidebar session titles may also contain the model name.
     private const string ClaudeModelPattern = @"^\s*(?:(?:Model|모델)\s*:?\s*(?:Claude\s+)?Opus\s+5\.5\b|(?:Claude\s+)?Opus\s+5\.5\s*$)";
     // Not ListItem: Claude's Chat tab exposes conversation text as list items.
@@ -50,6 +51,7 @@ internal static class ReasoningSwitch
                 return 1;
             }
         }
+        if (args.Length == 3 && args[0] == "--refresh-ime") return RefreshTextInput(args[1], args[2]);
         if (args.Length != 1 || (args[0] != "up" && args[0] != "down" && args[0] != "input" && args[0] != "status" && args[0] != "markdown")) return 2;
         // Screenshot coordinates and cursor coordinates must use physical pixels.
         SetProcessDpiAwarenessContext(new IntPtr(-4));
@@ -68,6 +70,8 @@ internal static class ReasoningSwitch
                 // Require a stable release; a transient release can occur between chords.
                 WaitForInputRelease();
                 trace.AppendLine("Initial key release at " + operationTimer.ElapsedMilliseconds + " ms.");
+                // These runs move focus away from the chat input; keep what is typed meanwhile.
+                if (args[0] == "up" || args[0] == "down" || args[0] == "status") TypeAhead.Hold();
                 int direction = args[0] == "up" ? 1 : -1;
                 AutomationElement root = AutomationElement.FromHandle(targetWindow);
                 targetRoot = root;
@@ -99,11 +103,79 @@ internal static class ReasoningSwitch
             }
             finally
             {
+                if (focusTouched && targetWindow != IntPtr.Zero)
+                    try
+                    {
+                        // Held keys must wait for the renewed IME link, so wait for the refresh.
+                        using (Process refresh = Process.Start(new ProcessStartInfo(Process.GetCurrentProcess().MainModule.FileName,
+                            "--refresh-ime " + targetWindow.ToInt64() + " 0") { UseShellExecute = false, CreateNoWindow = true }))
+                            refresh.WaitForExit(2000);
+                    }
+                    catch { }
                 gate.ReleaseMutex();
+                try
+                {
+                    int typed = TypeAhead.Release();
+                    if (typed > 0 && app != null)
+                        File.AppendAllText(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "last-action-" + app + ".txt"),
+                            "Keys held during the run and typed again: " + typed + Environment.NewLine);
+                }
+                catch { }
             }
         }
     }
 
+    private static bool focusTouched;
+    // UI Automation's SetFocus leaves Chromium's link to the IME stale until the window is
+    // activated again: Hangul then composes in a box at the screen's top-left, and each
+    // first character lands only with the next one. Activating an invisible window and
+    // coming straight back renews it in about 0.1 s; focus stays where it was. Done from
+    // the helper itself it did not hold after the session status change, so a second,
+    // short-lived process does it once the helper has exited. It never pulls the window
+    // back to the front if the user has moved to another one.
+    private static int RefreshTextInput(string window, string parent)
+    {
+        if (parent != "0")
+            try { Process.GetProcessById(int.Parse(parent)).WaitForExit(2000); } catch { }
+        targetWindow = new IntPtr(long.Parse(window));
+        uint pid;
+        GetWindowThreadProcessId(targetWindow, out pid);
+        try { app = Process.GetProcessById((int)pid).ProcessName.ToLowerInvariant(); } catch { return 0; }
+        string result;
+        if (GetForegroundWindow() != targetWindow) result = "IME refresh skipped: the window is no longer in front.";
+        else result = BounceActivation();
+        try { File.AppendAllText(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "last-action-" + app + ".txt"), result + Environment.NewLine); } catch { }
+        return 0;
+    }
+    private static string BounceActivation()
+    {
+        bool plain, own, back;
+        using (System.Windows.Forms.Form bounce = new System.Windows.Forms.Form())
+        {
+            bounce.ShowInTaskbar = false;
+            bounce.FormBorderStyle = System.Windows.Forms.FormBorderStyle.None;
+            bounce.StartPosition = System.Windows.Forms.FormStartPosition.Manual;
+            bounce.Location = new System.Drawing.Point(-32000, -32000);
+            bounce.Size = new System.Drawing.Size(1, 1);
+            bounce.Opacity = 0;
+            bounce.Show();
+            System.Windows.Forms.Application.DoEvents();
+            plain = SetForegroundWindow(bounce.Handle) && GetForegroundWindow() == bounce.Handle;
+            if (!plain)
+            {
+                // A background process may not take the foreground; an input event of its own allows it.
+                keybd_event(0x12, 0, 0, TypeAhead.OwnKey);
+                SetForegroundWindow(bounce.Handle);
+                keybd_event(0x12, 0, 2, TypeAhead.OwnKey);
+            }
+            System.Windows.Forms.Application.DoEvents();
+            own = GetForegroundWindow() == bounce.Handle;
+            SetForegroundWindow(targetWindow);
+            System.Windows.Forms.Application.DoEvents();
+            back = GetForegroundWindow() == targetWindow;
+        }
+        return "IME refresh: plain switch=" + plain + ", own window in front=" + own + ", back=" + back;
+    }
     private static bool IsDown(int key) { return (GetAsyncKeyState(key) & 0x8000) != 0; }
     private static bool InputHeld()
     {
@@ -518,7 +590,7 @@ internal static class ReasoningSwitch
         {
             try
             {
-                if (!TextEntryFocused()) before.SetFocus();
+                if (!TextEntryFocused()) { focusTouched = true; before.SetFocus(); }
                 Thread.Sleep(60);
                 if (TextEntryFocused()) { trace.AppendLine("Focus restored at " + timer.ElapsedMilliseconds + " ms."); return true; }
             }
@@ -1135,6 +1207,7 @@ internal static class ReasoningSwitch
             {
                 try
                 {
+                    focusTouched = true;
                     row.Element.SetFocus();
                     Thread.Sleep(40);
                     AutomationElement focused = AutomationElement.FocusedElement;
@@ -1147,8 +1220,8 @@ internal static class ReasoningSwitch
             // Ctrl+Alt+Right is Claude's "next sidebar tab", so the chord must be fully released.
             WaitForInputRelease();
             EnsureForeground();
-            keybd_event(0x27, 0, 1, UIntPtr.Zero);
-            keybd_event(0x27, 0, 3, UIntPtr.Zero);
+            keybd_event(0x27, 0, 1, TypeAhead.OwnKey);
+            keybd_event(0x27, 0, 3, TypeAhead.OwnKey);
             timer.Restart();
             do
             {

@@ -21,6 +21,7 @@ internal static class ReasoningSwitch
     [DllImport("user32.dll")] private static extern bool SetCursorPos(int x, int y);
     [DllImport("user32.dll")] private static extern bool GetCursorPos(out System.Drawing.Point point);
     [DllImport("user32.dll")] private static extern void mouse_event(uint flags, uint dx, uint dy, uint data, UIntPtr extraInfo);
+    [DllImport("user32.dll")] private static extern void keybd_event(byte key, byte scan, uint flags, UIntPtr extraInfo);
     private static IntPtr targetWindow;
     private static string app = "";
     private static AutomationElement targetRoot;
@@ -28,7 +29,7 @@ internal static class ReasoningSwitch
     private static System.Windows.Rect chatInputWindowBounds = System.Windows.Rect.Empty;
     private static StringBuilder trace = new StringBuilder();
     private static Stopwatch operationTimer = Stopwatch.StartNew();
-    private const string BuildName = "26-slider-miss-details";
+    private const string BuildName = "28-mouse-free-status";
     // Anchored: sidebar session titles may also contain the model name.
     private const string ClaudeModelPattern = @"^\s*(?:(?:Model|모델)\s*:?\s*(?:Claude\s+)?Opus\s+5\.5\b|(?:Claude\s+)?Opus\s+5\.5\s*$)";
     // Not ListItem: Claude's Chat tab exposes conversation text as list items.
@@ -49,7 +50,7 @@ internal static class ReasoningSwitch
                 return 1;
             }
         }
-        if (args.Length != 1 || (args[0] != "up" && args[0] != "down" && args[0] != "input")) return 2;
+        if (args.Length != 1 || (args[0] != "up" && args[0] != "down" && args[0] != "input" && args[0] != "status" && args[0] != "markdown")) return 2;
         // Screenshot coordinates and cursor coordinates must use physical pixels.
         SetProcessDpiAwarenessContext(new IntPtr(-4));
         bool ownsLock;
@@ -63,6 +64,7 @@ internal static class ReasoningSwitch
                 GetWindowThreadProcessId(targetWindow, out pid);
                 app = Process.GetProcessById((int)pid).ProcessName.ToLowerInvariant();
                 if (app != "chatgpt" && app != "claude") return 0;
+                if ((args[0] == "status" || args[0] == "markdown") && app != "claude") return 0;
                 // Require a stable release; a transient release can occur between chords.
                 WaitForInputRelease();
                 trace.AppendLine("Initial key release at " + operationTimer.ElapsedMilliseconds + " ms.");
@@ -70,9 +72,11 @@ internal static class ReasoningSwitch
                 AutomationElement root = AutomationElement.FromHandle(targetWindow);
                 targetRoot = root;
                 if (args[0] == "input") { FocusInput(root); return 0; }
+                if (args[0] == "markdown") { ToggleMarkdownView(root); return 0; }
                 Stopwatch inputTimer = Stopwatch.StartNew();
                 RememberChatInput(root);
                 trace.AppendLine("Chat input lookup=" + inputTimer.ElapsedMilliseconds + " ms.");
+                if (args[0] == "status") { ToggleSessionStatus(root); return 0; }
                 if (app == "chatgpt") SwitchCodex(root, direction);
                 else SwitchClaude(root, direction);
                 return 0;
@@ -87,7 +91,9 @@ internal static class ReasoningSwitch
             {
                 WriteDiagnostic(error);
                 Record("ERROR: " + error.Message);
-                ShowNotice((args[0] == "input" ? "입력란으로 이동하지 못했습니다." : "추론 전환을 확인하지 못했습니다.") +
+                ShowNotice((args[0] == "input" ? "입력란으로 이동하지 못했습니다." :
+                    args[0] == "status" ? "세션 상태 필터를 바꾸지 못했습니다." :
+                    args[0] == "markdown" ? "Markdown 미리보기/소스를 전환하지 못했습니다." : "추론 전환을 확인하지 못했습니다.") +
                     "\nReasoningHotkeys의 last-result.txt를 확인하세요.");
                 return 1;
             }
@@ -101,7 +107,7 @@ internal static class ReasoningSwitch
     private static bool IsDown(int key) { return (GetAsyncKeyState(key) & 0x8000) != 0; }
     private static bool InputHeld()
     {
-        return IsDown(17) || IsDown(18) || IsDown(16) || IsDown(91) || IsDown(92) || IsDown(38) || IsDown(40) || IsDown(191);
+        return IsDown(17) || IsDown(18) || IsDown(16) || IsDown(91) || IsDown(92) || IsDown(38) || IsDown(40) || IsDown(191) || IsDown(83) || IsDown(68);
     }
     private static void WaitForInputRelease()
     {
@@ -766,6 +772,200 @@ internal static class ReasoningSwitch
         }
         FinishWithInputFocus("Opus 5.5: " + Label(target) + (target == current ? " (unchanged)" : " (menu verified)"));
     }
+    // Code tab sidebar: Filter > Status flips between Active and Archived; All goes to Active.
+    private static int SessionStatusOption(string name)
+    {
+        string[] patterns = { @"^\s*(active\b|활성)", @"^\s*(archived\b|보관됨)", @"^\s*(all\b|전체)" };
+        for (int option = 0; option < patterns.Length; option++)
+            if (Regex.IsMatch(name, patterns[option], RegexOptions.IgnoreCase)) return option;
+        return -1;
+    }
+    private static string StatusLabel(int option) { return new[] { "Active", "Archived", "All" }[option]; }
+    private static int RowSessionStatus(ClaudeMenuItem row)
+    {
+        // The row's name carries its current value, e.g. "상태 활성".
+        return row == null ? -1 : SessionStatusOption(Regex.Replace(row.Name, @"^\s*(상태|status)\s*", "", RegexOptions.IgnoreCase));
+    }
+    private static ClaudeMenuItem SessionStatusRow(List<ClaudeMenuItem> items)
+    {
+        foreach (ClaudeMenuItem item in items) if (Regex.IsMatch(item.Name, @"^\s*(상태|status)\b", RegexOptions.IgnoreCase)) return item;
+        return null;
+    }
+    private static ClaudeMenuItem SessionStatusChoice(List<ClaudeMenuItem> items, int option)
+    {
+        foreach (ClaudeMenuItem item in items) if (SessionStatusOption(item.Name) == option) return item;
+        return null;
+    }
+    private static int ChosenSessionStatus(List<ClaudeMenuItem> items)
+    {
+        foreach (ClaudeMenuItem item in items)
+            if (SessionStatusOption(item.Name) >= 0 && IsChosen(item.Element)) return SessionStatusOption(item.Name);
+        return -1;
+    }
+    // Session rows below the filter button: archived ones are named "보관됨 …".
+    private static int SidebarSessionStatus(AutomationElement root, System.Windows.Rect filter, int target)
+    {
+        int rows = 0, archived = 0;
+        CacheRequest cache = new CacheRequest();
+        cache.Add(AutomationElement.NameProperty);
+        cache.Add(AutomationElement.BoundingRectangleProperty);
+        cache.Add(AutomationElement.IsOffscreenProperty);
+        cache.Add(AutomationElement.IsInvokePatternAvailableProperty);
+        cache.TreeScope = TreeScope.Element;
+        using (cache.Activate())
+            foreach (AutomationElement button in root.FindAll(TreeScope.Descendants,
+                new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Button)))
+                try
+                {
+                    System.Windows.Rect bounds = button.Cached.BoundingRectangle;
+                    if (button.Cached.IsOffscreen || bounds.IsEmpty || bounds.Top <= filter.Bottom ||
+                        bounds.Right > filter.Right + 8 || bounds.Width < 200 ||
+                        !(bool)button.GetCachedPropertyValue(AutomationElement.IsInvokePatternAvailableProperty)) continue;
+                    rows++;
+                    if (Regex.IsMatch(button.Cached.Name ?? "", @"^\s*(보관됨|archived)\b", RegexOptions.IgnoreCase)) archived++;
+                }
+                catch { }
+        if (archived > 0) return 1;
+        if (rows > 0) return 0;
+        // An empty list is what Archived shows when nothing has been archived.
+        return target == 1 ? 1 : -1;
+    }
+    // File pane: the Markdown view button is named after the view it switches to.
+    private static bool IsMarkdownViewToggle(string name)
+    {
+        return Regex.IsMatch(name, @"^\s*(소스\s*보기|미리\s*보기|view\s+source|show\s+source|preview)\s*$", RegexOptions.IgnoreCase);
+    }
+    private static void ToggleMarkdownView(AutomationElement root)
+    {
+        AutomationElement toggle = null;
+        int found = 0;
+        foreach (AutomationElement button in Elements(root, ControlType.Button))
+            if (IsMarkdownViewToggle(Name(button))) { if (toggle == null) toggle = button; found++; }
+        trace.AppendLine("Markdown view buttons=" + found);
+        if (toggle == null) throw new InvalidOperationException("No Markdown preview/source button is visible; open a .md file in the file pane.");
+        string before = Name(toggle);
+        bool toSource = Regex.IsMatch(before, @"소스|source", RegexOptions.IgnoreCase);
+        object invoke;
+        if (!toggle.TryGetCurrentPattern(InvokePattern.Pattern, out invoke))
+            throw new InvalidOperationException("The Markdown view button cannot be pressed.");
+        // Invoke presses the button without moving the mouse or the keyboard focus.
+        EnsureForeground();
+        ((InvokePattern)invoke).Invoke();
+        string after = before;
+        Stopwatch timer = Stopwatch.StartNew();
+        do
+        {
+            Thread.Sleep(25);
+            try { after = toggle.Current.Name ?? ""; } catch { after = ""; }
+            if (after != before && IsMarkdownViewToggle(after)) break;
+        } while (timer.ElapsedMilliseconds < 1500);
+        trace.AppendLine("Markdown button: " + before + " -> " + after);
+        if (after == before || !IsMarkdownViewToggle(after))
+            throw new InvalidOperationException("The Markdown view did not confirm the switch.");
+        Record("Markdown: " + (toSource ? "source" : "preview") + " (button verified)");
+    }
+    // Mouse-free: UI Automation opens the menu and picks the option. Only the
+    // Status submenu ignores UI Automation, so one Right arrow key opens it.
+    private static void ToggleSessionStatus(AutomationElement root)
+    {
+        AutomationElement filter = null;
+        foreach (AutomationElement button in Elements(root, ControlType.Button))
+            if (Regex.IsMatch(Name(button), @"^\s*(필터|filter)(\s*\(.*\))?\s*$", RegexOptions.IgnoreCase)) { filter = button; break; }
+        if (filter == null) throw new InvalidOperationException("The sidebar filter button was not found; open the Code tab sidebar.");
+        AutomationElement before = null;
+        try { before = AutomationElement.FocusedElement; if (!IsTextEntry(before)) before = null; } catch { before = null; }
+        List<ClaudeMenuItem> items = null;
+        ClaudeMenuItem row = null, option = null;
+        int current = -1;
+        Stopwatch timer = Stopwatch.StartNew();
+        // A menu opened a moment ago can still move focus or close; then open it once more.
+        for (int attempt = 1; attempt <= 2 && option == null; attempt++)
+        {
+            // The button's expanded state can outlive its menu, so look for the menu itself.
+            items = ClaudeMenuItems(root);
+            if (SessionStatusRow(items) == null)
+            {
+                object expand;
+                if (!filter.TryGetCurrentPattern(ExpandCollapsePattern.Pattern, out expand))
+                    throw new InvalidOperationException("The filter button cannot be opened.");
+                EnsureForeground();
+                ((ExpandCollapsePattern)expand).Expand();
+            }
+            timer.Restart();
+            do
+            {
+                EnsureForeground();
+                items = ClaudeMenuItems(root);
+                row = SessionStatusRow(items);
+                if (row != null) break;
+                Thread.Sleep(25);
+            } while (timer.ElapsedMilliseconds < 1600);
+            if (row == null)
+            {
+                trace.AppendLine("menu items=" + MenuNames(items));
+                throw new InvalidOperationException("The status row was not found in the filter menu; no change made.");
+            }
+            trace.AppendLine("attempt " + attempt + ": status row=" + row.Name);
+            current = RowSessionStatus(row);
+            // Let the menu settle, then send the key only while the row itself has focus.
+            Thread.Sleep(100);
+            bool rowFocused = false;
+            try
+            {
+                row.Element.SetFocus();
+                AutomationElement focused = AutomationElement.FocusedElement;
+                rowFocused = focused != null && (focused.Current.Name ?? "") == row.Name;
+            }
+            catch { }
+            trace.AppendLine("status row focused=" + rowFocused);
+            if (!rowFocused) continue;
+            // Ctrl+Alt+Right is Claude's "next sidebar tab", so the chord must be fully released.
+            WaitForInputRelease();
+            EnsureForeground();
+            keybd_event(0x27, 0, 1, UIntPtr.Zero);
+            keybd_event(0x27, 0, 3, UIntPtr.Zero);
+            timer.Restart();
+            do
+            {
+                EnsureForeground();
+                items = ClaudeMenuItems(root);
+                int chosen = ChosenSessionStatus(items);
+                if (chosen >= 0) current = chosen;
+                if (current >= 0) option = SessionStatusChoice(items, current == 0 ? 1 : 0);
+                if (option != null || items.Count == 0) break;
+                Thread.Sleep(25);
+            } while (timer.ElapsedMilliseconds < 1000);
+            if (option == null) trace.AppendLine("submenu not open; menu items=" + MenuNames(items));
+        }
+        if (option == null)
+            throw new InvalidOperationException("The Active and Archived options were not found in the filter menu; no change made.");
+        int target = current == 0 ? 1 : 0;
+        trace.AppendLine("current=" + StatusLabel(current) + ", target option=" + option.Name);
+        object invoke;
+        if (!option.Element.TryGetCurrentPattern(InvokePattern.Pattern, out invoke))
+            throw new InvalidOperationException("The " + StatusLabel(target) + " option cannot be chosen.");
+        EnsureForeground();
+        ((InvokePattern)invoke).Invoke();
+        // Choosing an option closes the menu; then the sidebar list shows the result.
+        int confirmed = -1;
+        System.Windows.Rect filterBounds = filter.Current.BoundingRectangle;
+        timer.Restart();
+        do
+        {
+            EnsureForeground();
+            items = ClaudeMenuItems(root);
+            confirmed = items.Count > 0 ? ChosenSessionStatus(items) : SidebarSessionStatus(root, filterBounds, target);
+            if (confirmed == target) break;
+            Thread.Sleep(25);
+        } while (timer.ElapsedMilliseconds < 2000);
+        trace.AppendLine("confirmed=" + confirmed);
+        if (confirmed != target) throw new InvalidOperationException("The filter menu did not confirm " + StatusLabel(target) + ".");
+        // The closed menu leaves focus on the filter button; give it back to the text entry it came from.
+        bool restored = false;
+        if (before != null)
+            try { before.SetFocus(); Thread.Sleep(30); restored = TextEntryFocused(); } catch { }
+        Record("Sessions: " + StatusLabel(target) + " (verified)" + (before == null ? "" : restored ? "; focus restored" : "; focus not restored"));
+    }
     private static int CurrentButtonEffort(AutomationElement button, bool gpt)
     {
         try
@@ -1333,6 +1533,12 @@ internal static class ReasoningSwitch
             Effort("xHigh") != 2 || Effort("highest") != -1 || Effort("매우 높음") != 2 ||
             Effort("노력: 엑스트라") != 2 || Effort("노력: 높음") != 1 || Effort("노력: 보통") != 0 ||
             EffortOption("Extra High", 1) || !EffortOption("Extra High", 2)) return 1;
+        // Sidebar status options and the status row's current value; Markdown view button names.
+        if (SessionStatusOption("활성") != 0 || SessionStatusOption("보관됨") != 1 || SessionStatusOption("전체") != 2 ||
+            SessionStatusOption("Archived") != 1 || SessionStatusOption("환경 전체") != -1 ||
+            RowSessionStatus(new ClaudeMenuItem { Name = "상태 보관됨" }) != 1 || RowSessionStatus(new ClaudeMenuItem { Name = "Status Active" }) != 0 ||
+            !IsMarkdownViewToggle("소스 보기") || !IsMarkdownViewToggle("미리보기") || IsMarkdownViewToggle("확장 프로그램 미리보기 실패"))
+            throw new InvalidOperationException("Sidebar status or Markdown view selftest failed.");
         string[] korean = { "노력: 낮음", "노력: 중간", "노력: 높음", "노력: 엑스트라", "노력: 최대", "노력: Ultracode" };
         string[] english = { "Effort: Low", "Effort: Medium", "Effort: High", "Effort: Extra", "Effort: Max", "Effort: Ultracode" };
         for (int level = 0; level < 6; level++)

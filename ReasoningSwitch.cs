@@ -29,7 +29,7 @@ internal static class ReasoningSwitch
     private static System.Windows.Rect chatInputWindowBounds = System.Windows.Rect.Empty;
     private static StringBuilder trace = new StringBuilder();
     private static Stopwatch operationTimer = Stopwatch.StartNew();
-    private const string BuildName = "28-mouse-free-status";
+    private const string BuildName = "32-mouse-free-chat-tab";
     // Anchored: sidebar session titles may also contain the model name.
     private const string ClaudeModelPattern = @"^\s*(?:(?:Model|모델)\s*:?\s*(?:Claude\s+)?Opus\s+5\.5\b|(?:Claude\s+)?Opus\s+5\.5\s*$)";
     // Not ListItem: Claude's Chat tab exposes conversation text as list items.
@@ -313,6 +313,90 @@ internal static class ReasoningSwitch
         // The mode switch reads "..., current mode: Codex" or "...: ChatGPT"; both show the same slider.
         return Regex.IsMatch(name, @"(mode|모드).*\b(Codex|ChatGPT)\b", RegexOptions.IgnoreCase);
     }
+    // Mouse-free attempt, like Claude's: open the popup through UI Automation and set its
+    // slider if one is exposed with GPT's five steps. Not yet seen on a live ChatGPT window;
+    // anything unexpected closes what it opened and returns false for the image flow.
+    private static bool TrySetGptSlider(AutomationElement buttonModel, int current, int target)
+    {
+        object pattern;
+        if (buttonModel == null || !buttonModel.TryGetCurrentPattern(ExpandCollapsePattern.Pattern, out pattern))
+        {
+            trace.AppendLine("GPT model button has no expand pattern; using the image flow.");
+            return false;
+        }
+        ExpandCollapsePattern popup = (ExpandCollapsePattern)pattern;
+        AutomationElement before = null;
+        try { before = AutomationElement.FocusedElement; if (!IsTextEntry(before)) before = null; } catch { before = null; }
+        bool opened = false;
+        try
+        {
+            EnsureForeground();
+            popup.Expand();
+            opened = true;
+            System.Windows.Rect anchor = buttonModel.Current.BoundingRectangle;
+            Condition sliderCondition = new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Slider);
+            RangeValuePattern range = null;
+            Stopwatch timer = Stopwatch.StartNew();
+            do
+            {
+                EnsureForeground();
+                foreach (AutomationElement candidate in targetRoot.FindAll(TreeScope.Descendants, sliderCondition))
+                    try
+                    {
+                        System.Windows.Rect bounds = candidate.Current.BoundingRectangle;
+                        if (!candidate.Current.IsOffscreen && !bounds.IsEmpty && Math.Abs(bounds.Y - anchor.Y) < 400 &&
+                            Math.Abs(bounds.X - anchor.X) < 500 && candidate.TryGetCurrentPattern(RangeValuePattern.Pattern, out pattern))
+                        { range = (RangeValuePattern)pattern; break; }
+                    }
+                    catch { }
+                if (range != null) break;
+                Thread.Sleep(25);
+            } while (timer.ElapsedMilliseconds < 700);
+            if (range == null) { trace.AppendLine("GPT slider not exposed to UI Automation; using the image flow."); return false; }
+            double minimum = range.Current.Minimum, maximum = range.Current.Maximum;
+            if (maximum - minimum != 4 || range.Current.IsReadOnly || (int)Math.Round(range.Current.Value - minimum) != current)
+            {
+                trace.AppendLine("GPT slider range=" + minimum + ".." + maximum + ", value=" + range.Current.Value + "; using the image flow.");
+                return false;
+            }
+            range.SetValue(minimum + target);
+            int confirmed = -1;
+            timer.Restart();
+            do
+            {
+                Thread.Sleep(25);
+                try { confirmed = (int)Math.Round(range.Current.Value - minimum); } catch { }
+            } while (confirmed != target && timer.ElapsedMilliseconds < 1000);
+            trace.AppendLine("GPT slider set through UI Automation; confirmed=" + confirmed);
+            if (confirmed != target) throw new InvalidOperationException("GPT's slider did not confirm " + GptLabel(target) + ".");
+            popup.Collapse();
+            opened = false;
+            int shown = -1;
+            timer.Restart();
+            do
+            {
+                shown = CurrentButtonEffort(buttonModel, true);
+                if (shown == target) break;
+                Thread.Sleep(25);
+            } while (timer.ElapsedMilliseconds < 1000);
+            trace.AppendLine("GPT model button after close=" + shown);
+            if (shown != target) throw new InvalidOperationException("GPT's model button did not confirm " + GptLabel(target) + ".");
+            bool restored = false;
+            if (before != null)
+                restored = RestoreTextFocus(before);
+            Record("GPT 6.1 Sol: " + GptLabel(target) + " (slider verified)" + (before == null ? "" : restored ? "; chat input focused" : "; focus not restored"));
+            return true;
+        }
+        // A vanished element or a refused value means the slider cannot be driven this way.
+        catch (ElementNotAvailableException error) { trace.AppendLine("GPT slider attempt failed (" + error.Message + "); using the image flow."); return false; }
+        catch (ArgumentException error) { trace.AppendLine("GPT slider attempt failed (" + error.Message + "); using the image flow."); return false; }
+        finally
+        {
+            // Leave the popup closed so the image flow opens it with its usual mouse click.
+            if (opened)
+                try { popup.Collapse(); Thread.Sleep(150); } catch { }
+        }
+    }
     private static void SwitchCodex(AutomationElement root, int direction)
     {
         EnsureForeground();
@@ -367,6 +451,7 @@ internal static class ReasoningSwitch
             FinishWithInputFocus("GPT 6.1 Sol: " + GptLabel(target) + " (unchanged)");
             return;
         }
+        if (!wasOpen && TrySetGptSlider(buttonModel, current, target)) return;
         EnsureForeground();
         if (!wasOpen)
         {
@@ -424,6 +509,90 @@ internal static class ReasoningSwitch
         foreach (AutomationElement button in buttons) if (IsModelControl(Name(button))) return true;
         return false;
     }
+    // A closing popup hands focus back to its button a moment later, which would undo
+    // an immediate SetFocus; keep giving focus back until the text entry holds it.
+    private static bool RestoreTextFocus(AutomationElement before)
+    {
+        Stopwatch timer = Stopwatch.StartNew();
+        do
+        {
+            try
+            {
+                if (!TextEntryFocused()) before.SetFocus();
+                Thread.Sleep(60);
+                if (TextEntryFocused()) { trace.AppendLine("Focus restored at " + timer.ElapsedMilliseconds + " ms."); return true; }
+            }
+            catch { Thread.Sleep(60); }
+        } while (timer.ElapsedMilliseconds < 600);
+        return false;
+    }
+    // Mouse-free: the effort popup's slider exposes its 0-5 value to UI Automation.
+    // Returns false, leaving any open popup to the image flow, when it is not exposed.
+    private static bool TrySetClaudeSlider(AutomationElement root, AutomationElement trigger, int current, int target)
+    {
+        object pattern;
+        if (!trigger.TryGetCurrentPattern(ExpandCollapsePattern.Pattern, out pattern)) return false;
+        ExpandCollapsePattern popup = (ExpandCollapsePattern)pattern;
+        AutomationElement before = null;
+        try { before = AutomationElement.FocusedElement; if (!IsTextEntry(before)) before = null; } catch { before = null; }
+        EnsureForeground();
+        popup.Expand();
+        System.Windows.Rect anchor = trigger.Current.BoundingRectangle;
+        Condition sliderCondition = new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Slider);
+        AutomationElement slider = null;
+        Stopwatch timer = Stopwatch.StartNew();
+        do
+        {
+            EnsureForeground();
+            foreach (AutomationElement candidate in root.FindAll(TreeScope.Descendants, sliderCondition))
+                try
+                {
+                    System.Windows.Rect bounds = candidate.Current.BoundingRectangle;
+                    // The popup opens just above its button.
+                    if (!candidate.Current.IsOffscreen && !bounds.IsEmpty && Math.Abs(bounds.Bottom - anchor.Top) < 300 &&
+                        Math.Abs(bounds.X - anchor.X) < 400 && candidate.TryGetCurrentPattern(RangeValuePattern.Pattern, out pattern))
+                    { slider = candidate; break; }
+                }
+                catch { }
+            if (slider != null) break;
+            Thread.Sleep(25);
+        } while (timer.ElapsedMilliseconds < 1000);
+        if (slider == null) { trace.AppendLine("Effort slider not exposed to UI Automation; using the image flow."); return false; }
+        RangeValuePattern range = (RangeValuePattern)pattern;
+        if (range.Current.Minimum != 0 || range.Current.Maximum != 5 || range.Current.IsReadOnly || (int)Math.Round(range.Current.Value) != current)
+        {
+            trace.AppendLine("Effort slider range=" + range.Current.Minimum + ".." + range.Current.Maximum + ", value=" + range.Current.Value + "; using the image flow.");
+            return false;
+        }
+        try { range.SetValue(target); }
+        catch (Exception error) { trace.AppendLine("Effort slider rejected SetValue (" + error.Message + "); using the image flow."); return false; }
+        int confirmed = -1;
+        timer.Restart();
+        do
+        {
+            Thread.Sleep(25);
+            try { confirmed = (int)Math.Round(range.Current.Value); } catch { }
+        } while (confirmed != target && timer.ElapsedMilliseconds < 1000);
+        trace.AppendLine("Effort slider set through UI Automation; confirmed=" + confirmed);
+        if (confirmed != target) throw new InvalidOperationException("Claude's effort slider did not confirm " + Label(target) + ".");
+        popup.Collapse();
+        // The button's own name is the app's record of the chosen effort.
+        int shown = -1;
+        timer.Restart();
+        do
+        {
+            try { shown = ClaudeEffort(trigger.Current.Name ?? ""); } catch { }
+            if (shown == target) break;
+            Thread.Sleep(25);
+        } while (timer.ElapsedMilliseconds < 1000);
+        trace.AppendLine("effort button after close=" + shown);
+        if (shown != target) throw new InvalidOperationException("Claude's effort button did not confirm " + Label(target) + ".");
+        bool restored = false;
+        if (before != null)
+            restored = RestoreTextFocus(before);
+        Record("Opus 5.5: " + Label(target) + " (slider verified)" + (before == null ? "" : restored ? "; chat input focused" : "; focus not restored"));
+        return true;
+    }
     private static void SwitchClaude(AutomationElement root, int direction)
     {
         // Chromium builds its accessibility tree on request, so the first lookup
@@ -455,6 +624,7 @@ internal static class ReasoningSwitch
         trace.AppendLine("effort trigger=" + Name(trigger) + ", current=" + current);
         int target = NextClaude(current, direction);
         if (target == current) { FinishWithInputFocus("Opus 5.5: " + Label(target) + " (unchanged)"); return; }
+        if (TrySetClaudeSlider(root, trigger, current, target)) return;
 
         System.Windows.Rect triggerBounds = trigger.Current.BoundingRectangle;
         if (!triggerBounds.IsEmpty)
@@ -679,6 +849,67 @@ internal static class ReasoningSwitch
             (int)Math.Ceiling(item.Menu.Width), (int)Math.Ceiling(item.Menu.Height));
         claudeMenuBounds = claudeMenuBounds.IsEmpty ? menu : System.Drawing.Rectangle.Union(claudeMenuBounds, menu);
     }
+    // Mouse-free version of the Chat tab flow below; false hands over to it with the menu closed.
+    private static bool TrySwitchClaudeChatMenu(AutomationElement root, AutomationElement buttonModel, int current, int direction)
+    {
+        AutomationElement before = null;
+        try { before = AutomationElement.FocusedElement; if (!IsTextEntry(before)) before = null; } catch { before = null; }
+        ClaudeMenuItem row;
+        List<ClaudeMenuItem> items = OpenMenuRow(root, buttonModel, ClaudeEffortRow,
+            delegate(List<ClaudeMenuItem> open) { return ClaudeEffortOption(open, 0) != null || ClaudeEffortOption(open, 4) != null; }, out row);
+        if (items == null)
+        {
+            CloseMenu(root, buttonModel);
+            trace.AppendLine("Effort submenu did not open through UI Automation; using mouse clicks.");
+            Thread.Sleep(150);
+            return false;
+        }
+        int chosen = ChosenChatEffort(items);
+        if (chosen >= 0) current = chosen;
+        if (current < 0) current = ClaudeEffort(row.Name);
+        int target = NextClaudeChat(current, direction);
+        trace.AppendLine("current=" + current + ", target=" + target);
+        bool restored = false;
+        if (target != current)
+        {
+            ClaudeMenuItem option = ClaudeEffortOption(items, target);
+            if (option == null || !InvokeMenuItem(option))
+            {
+                CloseMenu(root, buttonModel);
+                throw new InvalidOperationException("Claude's " + Label(target) + " option cannot be chosen; no change made.");
+            }
+            // Confirm from the menu's own state, or from the model button once the menu has closed.
+            int confirmed = -1;
+            Stopwatch timer = Stopwatch.StartNew();
+            do
+            {
+                EnsureForeground();
+                items = ClaudeMenuItems(root);
+                confirmed = ChosenChatEffort(items);
+                ClaudeMenuItem live = ClaudeEffortRow(items);
+                if (confirmed != target && live != null && ClaudeEffort(live.Name) >= 0) confirmed = ClaudeEffort(live.Name);
+                if (confirmed != target && items.Count == 0)
+                {
+                    string name = "";
+                    try { name = buttonModel.Current.Name ?? ""; } catch { }
+                    if (Regex.IsMatch(name, ClaudeModelPattern, RegexOptions.IgnoreCase) && ClaudeEffort(name) >= 0) confirmed = ClaudeEffort(name);
+                }
+                if (confirmed == target) break;
+                Thread.Sleep(25);
+            } while (timer.ElapsedMilliseconds < 2000);
+            trace.AppendLine("confirmed=" + confirmed);
+            if (confirmed != target)
+            {
+                CloseMenu(root, buttonModel);
+                throw new InvalidOperationException("Claude's menu did not confirm " + Label(target) + ".");
+            }
+        }
+        CloseMenu(root, buttonModel);
+        if (before != null) restored = RestoreTextFocus(before);
+        Record("Opus 5.5: " + Label(target) + (target == current ? " (unchanged)" : " (menu verified)") +
+            (before == null ? "" : restored ? "; chat input focused" : "; focus not restored"));
+        return true;
+    }
     private static void SwitchClaudeChat(AutomationElement root, AutomationElement buttonModel, int direction)
     {
         claudeMenuFlow = true;
@@ -689,6 +920,7 @@ internal static class ReasoningSwitch
             FinishWithInputFocus("Opus 5.5: " + Label(current) + " (unchanged)");
             return;
         }
+        if (TrySwitchClaudeChatMenu(root, buttonModel, current, direction)) return;
         object expandPattern;
         bool alreadyOpen = buttonModel.TryGetCurrentPattern(ExpandCollapsePattern.Pattern, out expandPattern) &&
             ((ExpandCollapsePattern)expandPattern).Current.ExpandCollapseState == ExpandCollapseState.Expanded;
@@ -864,60 +1096,53 @@ internal static class ReasoningSwitch
             throw new InvalidOperationException("The Markdown view did not confirm the switch.");
         Record("Markdown: " + (toSource ? "source" : "preview") + " (button verified)");
     }
-    // Mouse-free: UI Automation opens the menu and picks the option. Only the
-    // Status submenu ignores UI Automation, so one Right arrow key opens it.
-    private static void ToggleSessionStatus(AutomationElement root)
+    // Mouse-free: expands the trigger's menu through UI Automation, then opens the row's
+    // submenu with one Right arrow key, the only step submenus ignore UI Automation for.
+    // A menu opened a moment ago can still move focus or close, so the step runs once
+    // more. Returns the items once submenuOpen accepts them, or null.
+    private static List<ClaudeMenuItem> OpenMenuRow(AutomationElement root, AutomationElement trigger,
+        Func<List<ClaudeMenuItem>, ClaudeMenuItem> findRow, Func<List<ClaudeMenuItem>, bool> submenuOpen, out ClaudeMenuItem row)
     {
-        AutomationElement filter = null;
-        foreach (AutomationElement button in Elements(root, ControlType.Button))
-            if (Regex.IsMatch(Name(button), @"^\s*(필터|filter)(\s*\(.*\))?\s*$", RegexOptions.IgnoreCase)) { filter = button; break; }
-        if (filter == null) throw new InvalidOperationException("The sidebar filter button was not found; open the Code tab sidebar.");
-        AutomationElement before = null;
-        try { before = AutomationElement.FocusedElement; if (!IsTextEntry(before)) before = null; } catch { before = null; }
+        row = null;
         List<ClaudeMenuItem> items = null;
-        ClaudeMenuItem row = null, option = null;
-        int current = -1;
-        Stopwatch timer = Stopwatch.StartNew();
-        // A menu opened a moment ago can still move focus or close; then open it once more.
-        for (int attempt = 1; attempt <= 2 && option == null; attempt++)
+        for (int attempt = 1; attempt <= 2; attempt++)
         {
             // The button's expanded state can outlive its menu, so look for the menu itself.
             items = ClaudeMenuItems(root);
-            if (SessionStatusRow(items) == null)
+            if (findRow(items) == null)
             {
                 object expand;
-                if (!filter.TryGetCurrentPattern(ExpandCollapsePattern.Pattern, out expand))
-                    throw new InvalidOperationException("The filter button cannot be opened.");
+                if (!trigger.TryGetCurrentPattern(ExpandCollapsePattern.Pattern, out expand)) return null;
                 EnsureForeground();
                 ((ExpandCollapsePattern)expand).Expand();
             }
-            timer.Restart();
+            Stopwatch timer = Stopwatch.StartNew();
             do
             {
                 EnsureForeground();
                 items = ClaudeMenuItems(root);
-                row = SessionStatusRow(items);
+                row = findRow(items);
                 if (row != null) break;
                 Thread.Sleep(25);
             } while (timer.ElapsedMilliseconds < 1600);
-            if (row == null)
-            {
-                trace.AppendLine("menu items=" + MenuNames(items));
-                throw new InvalidOperationException("The status row was not found in the filter menu; no change made.");
-            }
-            trace.AppendLine("attempt " + attempt + ": status row=" + row.Name);
-            current = RowSessionStatus(row);
-            // Let the menu settle, then send the key only while the row itself has focus.
-            Thread.Sleep(100);
+            if (row == null) { trace.AppendLine("menu items=" + MenuNames(items)); return null; }
+            trace.AppendLine("attempt " + attempt + ": row=" + row.Name);
+            // A menu that just opened moves focus into itself a moment later, which can undo
+            // SetFocus; keep focusing the row, and send the key only while the row has focus.
             bool rowFocused = false;
-            try
+            Stopwatch focusTimer = Stopwatch.StartNew();
+            do
             {
-                row.Element.SetFocus();
-                AutomationElement focused = AutomationElement.FocusedElement;
-                rowFocused = focused != null && (focused.Current.Name ?? "") == row.Name;
-            }
-            catch { }
-            trace.AppendLine("status row focused=" + rowFocused);
+                try
+                {
+                    row.Element.SetFocus();
+                    Thread.Sleep(40);
+                    AutomationElement focused = AutomationElement.FocusedElement;
+                    rowFocused = focused != null && (focused.Current.Name ?? "") == row.Name;
+                }
+                catch { Thread.Sleep(40); }
+            } while (!rowFocused && focusTimer.ElapsedMilliseconds < 500);
+            trace.AppendLine("row focused=" + rowFocused + " at " + focusTimer.ElapsedMilliseconds + " ms");
             if (!rowFocused) continue;
             // Ctrl+Alt+Right is Claude's "next sidebar tab", so the chord must be fully released.
             WaitForInputRelease();
@@ -929,27 +1154,65 @@ internal static class ReasoningSwitch
             {
                 EnsureForeground();
                 items = ClaudeMenuItems(root);
-                int chosen = ChosenSessionStatus(items);
-                if (chosen >= 0) current = chosen;
-                if (current >= 0) option = SessionStatusChoice(items, current == 0 ? 1 : 0);
-                if (option != null || items.Count == 0) break;
+                if (submenuOpen(items)) return items;
+                if (items.Count == 0) break;
                 Thread.Sleep(25);
             } while (timer.ElapsedMilliseconds < 1000);
-            if (option == null) trace.AppendLine("submenu not open; menu items=" + MenuNames(items));
+            trace.AppendLine("submenu not open; menu items=" + MenuNames(items));
         }
-        if (option == null)
-            throw new InvalidOperationException("The Active and Archived options were not found in the filter menu; no change made.");
+        return null;
+    }
+    private static bool InvokeMenuItem(ClaudeMenuItem item)
+    {
+        object pattern;
+        EnsureForeground();
+        if (item.Element.TryGetCurrentPattern(InvokePattern.Pattern, out pattern)) { ((InvokePattern)pattern).Invoke(); return true; }
+        if (item.Element.TryGetCurrentPattern(SelectionItemPattern.Pattern, out pattern)) { ((SelectionItemPattern)pattern).Select(); return true; }
+        return false;
+    }
+    private static void CloseMenu(AutomationElement root, AutomationElement trigger)
+    {
+        object pattern;
+        try
+        {
+            if (ClaudeMenuItems(root).Count > 0 && trigger.TryGetCurrentPattern(ExpandCollapsePattern.Pattern, out pattern))
+                ((ExpandCollapsePattern)pattern).Collapse();
+        }
+        catch { }
+    }
+    // Mouse-free: UI Automation opens the menu and picks the option. Only the
+    // Status submenu ignores UI Automation, so one Right arrow key opens it.
+    private static void ToggleSessionStatus(AutomationElement root)
+    {
+        AutomationElement filter = null;
+        foreach (AutomationElement button in Elements(root, ControlType.Button))
+            if (Regex.IsMatch(Name(button), @"^\s*(필터|filter)(\s*\(.*\))?\s*$", RegexOptions.IgnoreCase)) { filter = button; break; }
+        if (filter == null) throw new InvalidOperationException("The sidebar filter button was not found; open the Code tab sidebar.");
+        AutomationElement before = null;
+        try { before = AutomationElement.FocusedElement; if (!IsTextEntry(before)) before = null; } catch { before = null; }
+        ClaudeMenuItem row;
+        List<ClaudeMenuItem> items = OpenMenuRow(root, filter, SessionStatusRow,
+            delegate(List<ClaudeMenuItem> open) { return SessionStatusChoice(open, 0) != null && SessionStatusChoice(open, 1) != null; }, out row);
+        if (items == null)
+        {
+            CloseMenu(root, filter);
+            throw new InvalidOperationException("The Active and Archived options did not open in the filter menu; no change made.");
+        }
+        int current = ChosenSessionStatus(items);
+        if (current < 0) current = RowSessionStatus(row);
+        if (current < 0) { CloseMenu(root, filter); throw new InvalidOperationException("The current session status is unknown; no change made."); }
+        ClaudeMenuItem option = SessionStatusChoice(items, current == 0 ? 1 : 0);
         int target = current == 0 ? 1 : 0;
         trace.AppendLine("current=" + StatusLabel(current) + ", target option=" + option.Name);
-        object invoke;
-        if (!option.Element.TryGetCurrentPattern(InvokePattern.Pattern, out invoke))
+        if (!InvokeMenuItem(option))
+        {
+            CloseMenu(root, filter);
             throw new InvalidOperationException("The " + StatusLabel(target) + " option cannot be chosen.");
-        EnsureForeground();
-        ((InvokePattern)invoke).Invoke();
+        }
         // Choosing an option closes the menu; then the sidebar list shows the result.
         int confirmed = -1;
         System.Windows.Rect filterBounds = filter.Current.BoundingRectangle;
-        timer.Restart();
+        Stopwatch timer = Stopwatch.StartNew();
         do
         {
             EnsureForeground();
@@ -963,7 +1226,7 @@ internal static class ReasoningSwitch
         // The closed menu leaves focus on the filter button; give it back to the text entry it came from.
         bool restored = false;
         if (before != null)
-            try { before.SetFocus(); Thread.Sleep(30); restored = TextEntryFocused(); } catch { }
+            restored = RestoreTextFocus(before);
         Record("Sessions: " + StatusLabel(target) + " (verified)" + (before == null ? "" : restored ? "; focus restored" : "; focus not restored"));
     }
     private static int CurrentButtonEffort(AutomationElement button, bool gpt)

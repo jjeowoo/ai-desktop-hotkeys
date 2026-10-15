@@ -29,6 +29,7 @@ internal static class TypeAhead
     [DllImport("kernel32.dll")] private static extern IntPtr GetModuleHandle(string name);
 
     private static readonly List<HeldKey> held = new List<HeldKey>();
+    private static readonly HashSet<uint> pressed = new HashSet<uint>();
     private static HookProc proc;
     private static Thread pump;
     private static uint pumpThread;
@@ -67,12 +68,17 @@ internal static class TypeAhead
             else
             {
                 KeyInfo info = (KeyInfo)Marshal.PtrToStructure(data, typeof(KeyInfo));
-                if (info.Extra != OwnKey)
+                int message = kind.ToInt32();
+                bool up = message == 0x101 || message == 0x105;
+                // A key that was already down when holding began, such as the hotkey's own Ctrl
+                // and Alt, is released at once: only keys pressed during the run are held.
+                if (info.Extra != OwnKey && (!up || pressed.Contains(info.Key)))
                 {
-                    int message = kind.ToInt32();
                     lock (held)
-                        held.Add(new HeldKey { Key = (byte)info.Key, Scan = (byte)info.Scan,
-                            Up = message == 0x101 || message == 0x105, Extended = (info.Flags & 1) != 0 });
+                    {
+                        if (up) pressed.Remove(info.Key); else pressed.Add(info.Key);
+                        held.Add(new HeldKey { Key = (byte)info.Key, Scan = (byte)info.Scan, Up = up, Extended = (info.Flags & 1) != 0 });
+                    }
                     return new IntPtr(1);
                 }
             }
@@ -89,7 +95,7 @@ internal static class TypeAhead
         pump.Join(500);
         pump = null;
         HeldKey[] keys;
-        lock (held) { keys = held.ToArray(); held.Clear(); }
+        lock (held) { keys = held.ToArray(); held.Clear(); pressed.Clear(); }
         foreach (HeldKey key in keys)
         {
             keybd_event(key.Key, key.Scan, (key.Extended ? 1u : 0u) | (key.Up ? 2u : 0u), OwnKey);

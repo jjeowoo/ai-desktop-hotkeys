@@ -31,7 +31,7 @@ internal static class ReasoningSwitch
     private static System.Windows.Rect chatInputWindowBounds = System.Windows.Rect.Empty;
     private static StringBuilder trace = new StringBuilder();
     private static Stopwatch operationTimer = Stopwatch.StartNew();
-    private const string BuildName = "35-model-menu";
+    private const string BuildName = "36-tasks-pane";
     // Anchored: sidebar session titles may also contain the model name.
     private const string ClaudeModelPattern = @"^\s*(?:(?:Model|모델)\s*:?\s*(?:Claude\s+)?Opus\s+5\.5\b|(?:Claude\s+)?Opus\s+5\.5\s*$)";
     // Not ListItem: Claude's Chat tab exposes conversation text as list items.
@@ -53,7 +53,7 @@ internal static class ReasoningSwitch
             }
         }
         if (args.Length == 3 && args[0] == "--refresh-ime") return RefreshTextInput(args[1], args[2]);
-        if (args.Length != 1 || (args[0] != "up" && args[0] != "down" && args[0] != "input" && args[0] != "status" && args[0] != "markdown")) return 2;
+        if (args.Length != 1 || (args[0] != "up" && args[0] != "down" && args[0] != "input" && args[0] != "status" && args[0] != "markdown" && args[0] != "tasks")) return 2;
         // Screenshot coordinates and cursor coordinates must use physical pixels.
         SetProcessDpiAwarenessContext(new IntPtr(-4));
         bool ownsLock;
@@ -67,12 +67,12 @@ internal static class ReasoningSwitch
                 GetWindowThreadProcessId(targetWindow, out pid);
                 app = Process.GetProcessById((int)pid).ProcessName.ToLowerInvariant();
                 if (app != "chatgpt" && app != "claude") return 0;
-                if ((args[0] == "status" || args[0] == "markdown") && app != "claude") return 0;
+                if ((args[0] == "status" || args[0] == "markdown" || args[0] == "tasks") && app != "claude") return 0;
                 command = args[0];
                 // Clicks and the Right arrow key need the chord released first; a transient release
-                // can occur between chords. S and D only press controls through UI Automation, which
+                // can occur between chords. S, D and B only press controls through UI Automation, which
                 // held keys do not change, so they start at once instead of giving up after 3 s.
-                if (args[0] != "status" && args[0] != "markdown")
+                if (args[0] != "status" && args[0] != "markdown" && args[0] != "tasks")
                 {
                     WaitForInputRelease();
                     trace.AppendLine("Initial key release at " + operationTimer.ElapsedMilliseconds + " ms.");
@@ -83,6 +83,7 @@ internal static class ReasoningSwitch
                 AutomationElement root = AutomationElement.FromHandle(targetWindow);
                 targetRoot = root;
                 if (args[0] == "input") { FocusInput(root); return 0; }
+                if (args[0] == "tasks") { ToggleTasksPane(root); return 0; }
                 if (args[0] == "markdown") { ToggleMarkdownView(root); return 0; }
                 Stopwatch inputTimer = Stopwatch.StartNew();
                 RememberChatInput(root);
@@ -104,7 +105,8 @@ internal static class ReasoningSwitch
                 Record("ERROR: " + error.Message);
                 ShowNotice((args[0] == "input" ? "입력란으로 이동하지 못했습니다." :
                     args[0] == "status" ? "보관된 세션을 열지 못했습니다." :
-                    args[0] == "markdown" ? "Markdown 미리보기/소스를 전환하지 못했습니다." : "추론 전환을 확인하지 못했습니다.") +
+                    args[0] == "markdown" ? "Markdown 미리보기/소스를 전환하지 못했습니다." :
+                    args[0] == "tasks" ? "백그라운드 작업 창을 전환하지 못했습니다." : "추론 전환을 확인하지 못했습니다.") +
                     "\nReasoningHotkeys의 last-result.txt를 확인하세요.");
                 return 1;
             }
@@ -156,7 +158,7 @@ internal static class ReasoningSwitch
     }
     private static string BounceActivation()
     {
-        bool plain, own, back;
+        bool plain, own, back, retried = false;
         using (System.Windows.Forms.Form bounce = new System.Windows.Forms.Form())
         {
             bounce.ShowInTaskbar = false;
@@ -180,8 +182,18 @@ internal static class ReasoningSwitch
             SetForegroundWindow(targetWindow);
             System.Windows.Forms.Application.DoEvents();
             back = GetForegroundWindow() == targetWindow;
+            if (!back && own)
+            {
+                // Windows can refuse the way back too; never leave the hidden window in front.
+                keybd_event(0x12, 0, 0, TypeAhead.OwnKey);
+                SetForegroundWindow(targetWindow);
+                keybd_event(0x12, 0, 2, TypeAhead.OwnKey);
+                System.Windows.Forms.Application.DoEvents();
+                back = GetForegroundWindow() == targetWindow;
+                if (back) retried = true;
+            }
         }
-        return "IME refresh: plain switch=" + plain + ", own window in front=" + own + ", back=" + back;
+        return "IME refresh: plain switch=" + plain + ", own window in front=" + own + ", back=" + back + (retried ? " (second try)" : "");
     }
     private static bool IsDown(int key) { return (GetAsyncKeyState(key) & 0x8000) != 0; }
     private static bool InputHeld()
@@ -898,6 +910,94 @@ internal static class ReasoningSwitch
         if (targetRoot == null || !targetRoot.Current.BoundingRectangle.Contains(center))
             throw new InvalidOperationException(what + " is outside the active window; no click sent.");
         return new System.Drawing.Point((int)Math.Round(center.X), (int)Math.Round(center.Y));
+    }
+    // Mouse-free: the header's View options menu has a Background tasks check box that
+    // shows or hides the tasks pane; it is toggled through UI Automation, with no keys.
+    private static void ToggleTasksPane(AutomationElement root)
+    {
+        AutomationElement typing = FocusedTextEntry();
+        // An open pane is closed with its own Close button; the menu is only needed to open it.
+        AutomationElement pane = TasksPane(root);
+        if (pane != null) { CloseTasksPane(root, pane, typing); return; }
+        AutomationElement options = null;
+        foreach (AutomationElement button in Elements(root, ControlType.Button))
+            if (Regex.IsMatch(Name(button), @"^\s*(보기\s*옵션|view\s*options)\s*$", RegexOptions.IgnoreCase)) { options = button; break; }
+        object pattern;
+        if (options == null || !options.TryGetCurrentPattern(ExpandCollapsePattern.Pattern, out pattern))
+            throw new InvalidOperationException("The View options button was not found; open a session in the Code tab.");
+        ExpandCollapsePattern menu = (ExpandCollapsePattern)pattern;
+        EnsureForeground();
+        // The menu takes the window's focus; the IME is renewed after the run.
+        focusTouched = true;
+        menu.Expand();
+        AutomationElement box = null;
+        List<ClaudeMenuItem> items = null;
+        Stopwatch timer = Stopwatch.StartNew();
+        do
+        {
+            EnsureForeground();
+            items = ClaudeMenuItems(root);
+            foreach (ClaudeMenuItem item in items)
+                if (IsTasksLabel(item.Name)) { box = item.Element; break; }
+            if (box != null) break;
+            Thread.Sleep(25);
+        } while (timer.ElapsedMilliseconds < 1600);
+        if (box == null || !box.TryGetCurrentPattern(TogglePattern.Pattern, out pattern))
+        {
+            trace.AppendLine("menu items=" + MenuNames(items));
+            CloseMenu(root, options);
+            throw new InvalidOperationException("Background tasks was not found in the View options menu; no change made.");
+        }
+        TogglePattern toggle = (TogglePattern)pattern;
+        bool show = toggle.Current.ToggleState != ToggleState.On;
+        toggle.Toggle();
+        // Choosing usually closes the menu, so the pane itself confirms the change.
+        timer.Restart();
+        bool shown = !show;
+        do
+        {
+            Thread.Sleep(25);
+            EnsureForeground();
+            shown = TasksPaneShown(root);
+        } while (shown != show && timer.ElapsedMilliseconds < 1500);
+        CloseMenu(root, options);
+        trace.AppendLine("Background tasks: " + (show ? "show" : "hide") + ", pane shown=" + shown);
+        if (shown != show) throw new InvalidOperationException("The background tasks pane did not " + (show ? "open." : "close."));
+        Record("Tasks: pane " + (show ? "shown" : "hidden") + " (pane verified)" + GiveFocusBack(typing));
+    }
+    // The menu label carries the running task count, e.g. "백그라운드 작업 4".
+    private static bool IsTasksLabel(string name)
+    {
+        return Regex.IsMatch(name, @"^\s*(백그라운드\s*작업|background\s*tasks?)(\s*\d+)?\s*$", RegexOptions.IgnoreCase);
+    }
+    private static bool TasksPaneShown(AutomationElement root) { return TasksPane(root) != null; }
+    private static AutomationElement TasksPane(AutomationElement root)
+    {
+        foreach (AutomationElement group in Elements(root, ControlType.Group))
+            if (IsTasksLabel(Name(group))) return group;
+        return null;
+    }
+    private static void CloseTasksPane(AutomationElement root, AutomationElement pane, AutomationElement typing)
+    {
+        AutomationElement close = null;
+        foreach (AutomationElement button in Elements(pane, ControlType.Button))
+            if (Regex.IsMatch(Name(button), @"^\s*(닫기|close)\s*$", RegexOptions.IgnoreCase)) { close = button; break; }
+        object invoke;
+        if (close == null || !close.TryGetCurrentPattern(InvokePattern.Pattern, out invoke))
+            throw new InvalidOperationException("The background tasks pane has no Close button; no change made.");
+        EnsureForeground();
+        focusTouched = true;
+        ((InvokePattern)invoke).Invoke();
+        Stopwatch timer = Stopwatch.StartNew();
+        bool shown = true;
+        do
+        {
+            Thread.Sleep(25);
+            EnsureForeground();
+            shown = TasksPaneShown(root);
+        } while (shown && timer.ElapsedMilliseconds < 1500);
+        if (shown) throw new InvalidOperationException("The background tasks pane did not close.");
+        Record("Tasks: pane hidden (pane verified)" + GiveFocusBack(typing));
     }
     // Puts the caret in the chat input with one real click, so typing can start at once.
     private static void FocusInput(AutomationElement root)
@@ -1880,6 +1980,9 @@ internal static class ReasoningSwitch
             Effort("노력: 엑스트라") != 2 || Effort("노력: 높음") != 1 || Effort("노력: 보통") != 0 ||
             EffortOption("Extra High", 1) || !EffortOption("Extra High", 2)) return 1;
         // Sessions page tab names; Markdown view button names.
+        if (!IsTasksLabel("백그라운드 작업") || !IsTasksLabel("백그라운드 작업 4") || !IsTasksLabel("Background tasks 12") ||
+            IsTasksLabel("백그라운드 작업 지우기") || IsTasksLabel("채팅 및 백그라운드 작업 크기 조정"))
+            throw new InvalidOperationException("Background tasks label selftest failed.");
         if (!IsArchivedTab("보관됨") || !IsArchivedTab("Archived") || IsArchivedTab("활성") || IsArchivedTab("보관됨 검색용 2") ||
             !IsMarkdownViewToggle("소스 보기") || !IsMarkdownViewToggle("미리보기") || IsMarkdownViewToggle("확장 프로그램 미리보기 실패"))
             throw new InvalidOperationException("Sessions page or Markdown view selftest failed.");

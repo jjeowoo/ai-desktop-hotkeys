@@ -309,7 +309,7 @@ internal static class SelectionTranslator
     internal static string FailureMessage(int exitCode, string output, string error, string claude)
     {
         string all = (error ?? "") + "\n" + (output ?? "");
-        if (Regex.IsMatch(all, @"not logged in|run /login|invalid api key|please log ?in", RegexOptions.IgnoreCase))
+        if (Regex.IsMatch(all, @"not logged in|run /login|invalid api key|please log ?in|failed to authenticate|oauth session expired", RegexOptions.IgnoreCase))
             return "Claude Code CLI에 로그인되어 있지 않습니다.\n터미널에서 다음을 실행한 뒤 /login 하세요.\n\"" + claude + "\"";
         string detail = Normalize(string.IsNullOrWhiteSpace(error) ? output : error);
         if (detail.Length > 400) detail = detail.Substring(0, 400) + "…";
@@ -359,6 +359,7 @@ internal static class SelectionTranslator
             !area.Contains(new Rectangle(top, new Size(440, 1000))))
             throw new InvalidOperationException("Translation popup placement selftest failed.");
         if (!FailureMessage(1, "Not logged in · Please run /login", "", "C:\\x\\claude.exe").Contains("로그인") ||
+            !FailureMessage(1, "", "Failed to authenticate: OAuth session expired and could not be refreshed", "claude").Contains("로그인") ||
             !FailureMessage(1, "", "Error: overloaded\n", "claude").Contains("종료 코드 1).\nError: overloaded") ||
             FailureMessage(2, new string('a', 900), "", "claude").Length > 460)
             throw new InvalidOperationException("Translation failure message selftest failed.");

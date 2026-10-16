@@ -15,7 +15,7 @@ if ($Undo) {
     if (-not (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'ReasoningSwitch.exe'))) { throw 'ReasoningSwitch.exe is missing.' }
     # Windows PowerShell 5.1 returns the JSON array as one object; enumerate it explicitly.
     $records = @((Get-Content -LiteralPath (Join-Path $PSScriptRoot 'Hotkeys.json') -Raw | ConvertFrom-Json) | ForEach-Object { $_ })
-    if ($records.Count -ne 6) { throw 'Expected exactly six hotkey records.' }
+    if ($records.Count -ne 7) { throw 'Expected exactly seven hotkey records.' }
     $nextId = [int](($oldRecords | Measure-Object HotkeyID -Maximum).Maximum) + 1
     $helperPath = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot 'ReasoningSwitch.exe'))
     $helperLiteral = $helperPath | ConvertTo-Json -Compress

@@ -9,7 +9,8 @@ using System.Threading;
 using System.Windows.Automation;
 using System.Windows.Forms;
 
-// No network, clipboard access, chat submission, or background hotkey hook.
+// No network, clipboard access, chat submission, or background hotkey hook, except that
+// "translate" (Translate.cs) uses the clipboard and runs Claude Code's CLI on the selection.
 // StrokesPlus launches this only when the user presses the configured hotkey.
 internal static class ReasoningSwitch
 {
@@ -31,7 +32,7 @@ internal static class ReasoningSwitch
     private static System.Windows.Rect chatInputWindowBounds = System.Windows.Rect.Empty;
     private static StringBuilder trace = new StringBuilder();
     private static Stopwatch operationTimer = Stopwatch.StartNew();
-    private const string BuildName = "36-tasks-pane";
+    private const string BuildName = "37-translate";
     // Anchored: sidebar session titles may also contain the model name.
     private const string ClaudeModelPattern = @"^\s*(?:(?:Model|모델)\s*:?\s*(?:Claude\s+)?Opus\s+5\.5\b|(?:Claude\s+)?Opus\s+5\.5\s*$)";
     // Not ListItem: Claude's Chat tab exposes conversation text as list items.
@@ -53,6 +54,8 @@ internal static class ReasoningSwitch
             }
         }
         if (args.Length == 3 && args[0] == "--refresh-ime") return RefreshTextInput(args[1], args[2]);
+        if (args.Length == 1 && args[0] == "translate") return SelectionTranslator.Run();
+        if (args.Length == 1 && args[0] == "--translate-check") return SelectionTranslator.Check();
         if (args.Length != 1 || (args[0] != "up" && args[0] != "down" && args[0] != "input" && args[0] != "status" && args[0] != "markdown" && args[0] != "tasks")) return 2;
         // Screenshot coordinates and cursor coordinates must use physical pixels.
         SetProcessDpiAwarenessContext(new IntPtr(-4));
@@ -1952,6 +1955,7 @@ internal static class ReasoningSwitch
     private static int SelfTest()
     {
         StrokesImageSearch.SelfTest();
+        SelectionTranslator.SelfTest();
         GptFocusSelfTest();
         ForegroundSelfTest();
         // Protect the final click from search fields, off-window edits and popup overlap.

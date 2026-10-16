@@ -1,6 +1,6 @@
 # ai-desktop-hotkeys
 
-StrokesPlus.net 단축키로 ChatGPT Windows 앱과 Claude Desktop을 조작합니다.
+StrokesPlus.net 단축키로 ChatGPT Windows 앱과 Claude Desktop을 조작하고, 어느 앱에서나 선택한 영어를 한국어로 번역합니다.
 
 ## 단축키
 
@@ -11,13 +11,15 @@ StrokesPlus.net 단축키로 ChatGPT Windows 앱과 Claude Desktop을 조작합�
 | `Ctrl+Alt+S` | 보관된 세션 열기 | Claude Code | 안 씀 |
 | `Ctrl+Alt+D` | md 미리보기 ↔ 소스, 파일 창 열기/닫기 | Claude Code | 안 씀 |
 | `Ctrl+Alt+B` | 백그라운드 작업 창 열기/닫기 | Claude Code | 안 씀 |
+| `Ctrl+Alt+T` | 선택한 텍스트를 한국어로 번역 | 모든 앱 | 안 씀 |
 
-- 대상이 아닌 앱에서는 원래 키 조합을 그대로 그 앱에 전달합니다.
+- 대상이 아닌 앱에서는 원래 키 조합을 그대로 그 앱에 전달합니다. 번역 `T`는 모든 앱이 대상입니다.
 - ChatGPT의 추론 강도는 마우스 없는 방식을 먼저 시도하고, 안 되면 마우스를 씁니다([동작](#동작) 참고).
 - `/`는 숫자 키패드가 아니라 문자 키의 `/`입니다.
 - `Ctrl+Alt+A`는 Claude 자체 단축키(세션 보관)라 쓰지 않습니다.
 - `Ctrl+Alt+S`는 사이드바 `그룹화 및 정렬` 메뉴의 `모두 보기`로 세션 화면을 열고 `보관됨` 탭을 고릅니다. 세션 화면이 이미 열려 있으면 탭만 고릅니다. 사이드바에는 활성 세션이 항상 보입니다.
 - `Ctrl+Alt+D`는 파일 창에 `.md` 파일이 열려 있으면 미리보기와 소스를 바꿉니다. `.md` 보기가 없으면 파일 창을 열고, 파일 창이 `.md` 없이 열려 있으면 닫습니다.
+- 번역은 `Ctrl+Shift+T`가 브라우저의 "닫은 탭 다시 열기"와 겹쳐 `Ctrl+Alt+T`를 씁니다. 자세한 내용은 [선택 영역 번역](#선택-영역-번역)을 참고하세요.
 - `Ctrl+Alt+B`는 백그라운드 작업 창(`/tasks`로 보는 작업 목록)을 엽니다. 닫혀 있으면 오른쪽 위 `보기 옵션` 메뉴의 `백그라운드 작업`을 켜고, 열려 있으면 창의 `닫기` 버튼을 누릅니다. 입력란에 글을 치지 않으므로 쓰던 글이 있어도 됩니다.
 
 ### 추론 단계
@@ -32,6 +34,36 @@ StrokesPlus.net 단축키로 ChatGPT Windows 앱과 Claude Desktop을 조작합�
 - 양 끝에서는 현재 단계를 유지합니다.
 - 다른 모델이 선택돼 있으면 바꾸지 않고 중단합니다.
 
+## 선택 영역 번역
+
+브라우저, PDF 뷰어, 메모장, 터미널 등에서 영어를 드래그한 뒤 `Ctrl+Alt+T`를 누르면 마우스 커서 옆 팝업에 한국어 번역이 나옵니다.
+
+- 번역 중에는 `번역 중…`과 경과 시간을 표시합니다. 보통 몇 초 걸립니다.
+- `복사` 버튼이나 `Ctrl+C`(본문을 선택하지 않았을 때)로 번역문 전체를 복사합니다. 본문 일부를 드래그해 복사할 수도 있습니다.
+- `Esc`나 `닫기`로 닫으면 원래 창으로 돌아갑니다. 다른 곳을 클릭해도 팝업은 남아 있어 원문과 나란히 읽을 수 있고, 다시 `Ctrl+Alt+T`를 누르면 새 팝업으로 바뀝니다.
+- 선택 영역은 `Ctrl+C`로 복사해 읽고, 원래 클립보드 내용을 바로 되돌립니다. 터미널(Windows Terminal, 콘솔, mintty 등)에서는 선택이 없을 때 `Ctrl+C`가 실행 중인 프로그램을 멈추므로 `Ctrl+Insert`로 복사합니다. 되돌릴 수 없는 특수 형식(일부 앱 전용 개체)은 복원되지 않을 수 있습니다.
+- 번역은 Claude Code CLI를 비대화형으로 실행해 Haiku 모델로 합니다: `claude -p --model haiku --tools "" --no-session-persistence --strict-mcp-config`. 선택한 텍스트는 명령줄이 아니라 표준 입력(UTF-8)으로 넘기고, 도구·MCP 서버·세션 기록 없이 임시 폴더에서 실행합니다. 지시문은 `다음 텍스트를 자연스러운 한국어로 번역해. 설명 없이 번역문만 출력해:`입니다.
+- 한 번에 8,000자까지 번역하고, 90초 안에 응답이 없으면 멈춥니다.
+
+### Claude Code CLI 준비
+
+`claude`를 PATH, `%USERPROFILE%\.local\bin`, `%APPDATA%\npm` 순서로 찾고, 없으면 Claude 데스크톱 앱에 들어 있는 CLI(`%APPDATA%\Claude\claude-code\<버전>\…\claude.exe`)를 씁니다. 어느 것이든 **로그인된 상태**여야 합니다. 데스크톱 앱 안의 CLI는 앱 밖에서 실행하면 로그인되어 있지 않을 수 있습니다.
+
+CLI가 없으면 PowerShell에서 설치한 뒤 `claude`를 한 번 실행해 `/login` 합니다.
+
+```powershell
+irm https://claude.ai/install.ps1 | iex
+```
+
+설정이 됐는지는 팝업 없이 다음 명령으로 확인합니다. 예문 한 줄을 번역해 결과를 `last-result-translate.txt`에 씁니다.
+
+```powershell
+.\ReasoningSwitch.exe --translate-check
+Get-Content .\last-result-translate.txt
+```
+
+CLI를 찾지 못하거나, 로그인이 안 됐거나, 실패하면 팝업에 원인과 할 일을 표시합니다.
+
 ## 설치
 
 Windows, x64 .NET Framework 및 StrokesPlus.net이 필요합니다. StrokesPlus.net 0.5.7.8의 기본 설치 경로(`C:\Program Files\StrokesPlus.net`)에서 확인했습니다.
@@ -44,16 +76,16 @@ Windows, x64 .NET Framework 및 StrokesPlus.net이 필요합니다. StrokesPlus.
 powershell -NoProfile -ExecutionPolicy Bypass -File .\Install.ps1
 ```
 
-설치 프로그램은 StrokesPlus 설정을 백업하고 `AI Reasoning` 분류에 여섯 단축키를 등록한 뒤 StrokesPlus를 실행합니다. 다른 설정과 단축키는 보존합니다. 실행 경로는 설치한 폴더에 맞춰 생성하므로 다른 폴더에 설치해도 됩니다. 폴더를 이동하거나 이름을 바꾸면 새 위치에서 설치를 다시 실행하세요.
+설치 프로그램은 StrokesPlus 설정을 백업하고 `AI Reasoning` 분류에 일곱 단축키를 등록한 뒤 StrokesPlus를 실행합니다. 다른 설정과 단축키는 보존합니다. 실행 경로는 설치한 폴더에 맞춰 생성하므로 다른 폴더에 설치해도 됩니다. 폴더를 이동하거나 이름을 바꾸면 새 위치에서 설치를 다시 실행하세요.
 
-설정 변경 없이 확인하거나 이 여섯 단축키만 제거하려면 다음 명령을 사용합니다.
+설정 변경 없이 확인하거나 이 일곱 단축키만 제거하려면 다음 명령을 사용합니다.
 
 ```powershell
 .\Install.ps1 -DryRun
 .\Install.ps1 -Undo
 ```
 
-`Up.js`, `Down.js`, `Input.js`, `Status.js`, `Markdown.js`, `Tasks.js`는 수동 등록용 스크립트입니다. 기본 경로는 Windows 문서 폴더의 `_ETC\ai-desktop-hotkeys`이며, 다른 위치에서는 `reasoningHelper`를 변경하세요. `Hotkeys.json`은 설치 프로그램이 사용하는 템플릿입니다.
+`Up.js`, `Down.js`, `Input.js`, `Status.js`, `Markdown.js`, `Tasks.js`, `Translate.js`는 수동 등록용 스크립트입니다. 기본 경로는 Windows 문서 폴더의 `_ETC\ai-desktop-hotkeys`이며, 다른 위치에서는 `reasoningHelper`를 변경하세요. `Hotkeys.json`은 설치 프로그램이 사용하는 템플릿입니다.
 
 ## 동작
 
@@ -109,7 +141,7 @@ ChatGPT와, 접근성이 안 될 때의 예비 경로입니다.
 .\ReasoningSwitch.exe --selftest
 ```
 
-빌드는 다섯 C# 소스를 x64 실행 파일로 컴파일하고 자체 검사에 통과한 파일만 적용합니다. 이미지 검사에는 설치된 StrokesPlus.net이 필요합니다. `--selftest`는 첨부 이미지와 생성한 검사 캔버스만 사용하며 앱 화면을 캡처하거나 입력하지 않습니다.
+빌드는 여섯 C# 소스를 x64 실행 파일로 컴파일하고 자체 검사에 통과한 파일만 적용합니다. 이미지 검사에는 설치된 StrokesPlus.net이 필요합니다. `--selftest`는 첨부 이미지와 생성한 검사 캔버스만 사용하며 앱 화면을 캡처하거나 입력하지 않습니다.
 
 사용 중인 실행 파일을 건드리지 않고 빌드만 확인하려면 다른 폴더를 지정합니다. 참조 이미지도 그 폴더로 함께 복사합니다.
 
@@ -119,7 +151,7 @@ ChatGPT와, 접근성이 안 될 때의 예비 경로입니다.
 
 빌드 이름은 `ReasoningSwitch.cs`의 `BuildName` 한 곳에서 정의하고, `Build.ps1`은 그 값을 읽어 결과에 표시합니다.
 
-현재 버전은 **36-tasks-pane**입니다. 자체 검사 항목:
+현재 버전은 **37-translate**입니다. 자체 검사 항목:
 
 - 단계 이름, 양방향 이동과 경계, 노력 하위 메뉴 항목 이름과 Code 탭 여섯 단계·Chat 탭 다섯 단계의 경계, ChatGPT 모드 이름
 - 활성 창이 잠깐 바뀐 경우의 대기와 돌아오지 않는 경우의 중단
@@ -127,6 +159,7 @@ ChatGPT와, 접근성이 안 될 때의 예비 경로입니다.
 - 실제 참조 이미지의 손잡이, 뒤 내용 때문에 어두워진 GPT 팝업의 인식
 - 팝업이 남은 상태의 포커스 정보, 첫 클릭이 무시된 경우의 재시도, 입력란 클릭 위치
 - 세션 화면 `보관됨` 탭과 Markdown 보기 버튼의 이름
+- 번역: 팝업 위치(화면 가장자리에서 반대쪽으로), 로그인·기타 실패 메시지, `claude.exe`와 `claude.cmd` 실행 명령줄과 UTF-8 출력, 줄바꿈 정리와 터미널 판별
 - 최적화: 일부 글자만 일치하는 가짜 후보의 거부와 실제 팝업 복구, 창 밖으로 벗어나는 검색 영역, 잘라낸 이미지의 여섯 단계, 다른 모니터 좌표 변환
 
 ## 성능
@@ -146,12 +179,13 @@ ChatGPT와, 접근성이 안 될 때의 예비 경로입니다.
 - `last-action*.txt`: 최근 실행의 단계·소요 시간·포커스 결과, 접근성 조회·이미지 검색·캡처별 시간
 - `last-diagnostic*.txt`: 오류 발생 시 모델·추론 컨트롤 정보. 대화 내용이 목록 항목으로 노출되는 화면이 있어 목록 항목은 기록하지 않습니다.
 - `chat-input-*.txt`: 같은 창에서 재사용하는 창·프로세스 번호와 입력란 위치
+- `last-result-translate.txt`: 최근 번역의 결과·소요 시간·사용한 `claude` 경로. 원문과 번역문은 기록하지 않습니다.
 - `selftest-error.txt`: `--selftest`가 예외로 실패했을 때의 오류 내용
 - `StrokesPlus.before-*.json`: 설치 전 개인 설정 백업
 
 이름에 `-chatgpt`, `-claude`가 붙은 파일은 앱별 최근 기록입니다.
 
-실행 파일은 네트워크나 클립보드에 접근하지 않으며 대화를 전송하지 않습니다. 입력란의 본문을 읽거나 로그로 저장하지 않습니다. 화면 캡처는 이미지 검색을 위해 메모리에서만 사용합니다. 개인 설정 백업과 진단·위치 파일은 Git에서 제외됩니다.
+번역 `T`를 빼면 실행 파일은 네트워크나 클립보드에 접근하지 않으며 대화를 전송하지 않습니다. 번역 `T`는 선택 영역을 읽으려고 클립보드를 잠깐 쓰고, 선택한 텍스트를 Claude Code CLI를 통해 Claude로 보냅니다. 입력란의 본문을 읽거나 로그로 저장하지 않습니다. 화면 캡처는 이미지 검색을 위해 메모리에서만 사용합니다. 개인 설정 백업과 진단·위치 파일은 Git에서 제외됩니다.
 
 ## 라이선스
 

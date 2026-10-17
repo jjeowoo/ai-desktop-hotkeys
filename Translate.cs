@@ -241,7 +241,26 @@ internal static class SelectionTranslator
         return newest;
     }
 
-    internal static ProcessStartInfo StartInfo(string claude)
+    // A long-lived token from `claude setup-token`, kept apart from the CLI's own login: that login's
+    // refresh token rotates, and another process refreshing it first wipes the CLI's copy.
+    internal static string TokenPath()
+    {
+        return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "ai-desktop-hotkeys\\claude-token.txt");
+    }
+
+    internal static string ReadToken(string path)
+    {
+        try
+        {
+            if (!File.Exists(path)) return null;
+            // A token has no whitespace; a copy from a terminal that wrapped its long line may.
+            string token = Regex.Replace(File.ReadAllText(path), @"\s+", "");
+            return token.Length > 0 ? token : null;
+        }
+        catch { return null; }
+    }
+
+    internal static ProcessStartInfo StartInfo(string claude, string token = null)
     {
         bool script = claude.EndsWith(".cmd", StringComparison.OrdinalIgnoreCase) || claude.EndsWith(".bat", StringComparison.OrdinalIgnoreCase);
         ProcessStartInfo info = script
@@ -258,6 +277,8 @@ internal static class SelectionTranslator
         info.WorkingDirectory = Path.GetTempPath();
         // Claude Code refuses to start inside what looks like another Claude Code session.
         info.EnvironmentVariables.Remove("CLAUDECODE");
+        // The CLI takes this over its stored login; set for this process alone.
+        if (token != null) info.EnvironmentVariables["CLAUDE_CODE_OAUTH_TOKEN"] = token;
         return info;
     }
 
@@ -269,7 +290,8 @@ internal static class SelectionTranslator
             result.Text = "Claude Code CLI(claude)를 찾을 수 없습니다.\n설치한 뒤 터미널에서 claude를 한 번 실행해 로그인하세요.\n설치: PowerShell에서 irm https://claude.ai/install.ps1 | iex";
             return result;
         }
-        using (Process process = new Process { StartInfo = StartInfo(result.Claude) })
+        string tokenPath = TokenPath(), token = ReadToken(tokenPath);
+        using (Process process = new Process { StartInfo = StartInfo(result.Claude, token) })
         {
             try { process.Start(); }
             catch (Exception error)
@@ -301,16 +323,18 @@ internal static class SelectionTranslator
             lock (errors) errorText = errors.ToString();
             if (process.ExitCode == 0 && translated.Length > 0) { result.Ok = true; result.Text = translated; }
             else if (process.ExitCode == 0) result.Text = "번역 결과가 비어 있습니다.";
-            else result.Text = FailureMessage(process.ExitCode, translated, errorText, result.Claude);
+            else result.Text = FailureMessage(process.ExitCode, translated, errorText, result.Claude, tokenPath, token != null);
             return result;
         }
     }
 
-    internal static string FailureMessage(int exitCode, string output, string error, string claude)
+    internal static string FailureMessage(int exitCode, string output, string error, string claude, string tokenPath, bool usedToken)
     {
         string all = (error ?? "") + "\n" + (output ?? "");
-        if (Regex.IsMatch(all, @"not logged in|run /login|invalid api key|please log ?in|failed to authenticate|oauth session expired", RegexOptions.IgnoreCase))
-            return "Claude Code CLI에 로그인되어 있지 않습니다.\n터미널에서 다음을 실행한 뒤 /login 하세요.\n\"" + claude + "\"";
+        if (Regex.IsMatch(all, @"not logged in|run /login|invalid api key|please log ?in|failed to authenticate|oauth session expired|invalid bearer token|token (has )?expired|revoked", RegexOptions.IgnoreCase))
+            return (usedToken ? "저장한 Claude 토큰이 만료됐거나 취소됐습니다.\n" : "Claude Code CLI에 로그인되어 있지 않습니다.\n") +
+                "터미널에서 다음을 실행해 1년짜리 토큰을 발급받고,\n\"" + claude + "\" setup-token\n" +
+                "출력된 토큰을 다음 파일에 저장하세요.\n" + tokenPath;
         string detail = Normalize(string.IsNullOrWhiteSpace(error) ? output : error);
         if (detail.Length > 400) detail = detail.Substring(0, 400) + "…";
         return "번역하지 못했습니다(claude 종료 코드 " + exitCode + ")." + (detail.Length > 0 ? "\n" + detail : "");
@@ -358,16 +382,31 @@ internal static class SelectionTranslator
         if (near != new Point(516, 324) || corner != new Point(1910 - 16 - 440, 1030 - 16 - 200) ||
             !area.Contains(new Rectangle(top, new Size(440, 1000))))
             throw new InvalidOperationException("Translation popup placement selftest failed.");
-        if (!FailureMessage(1, "Not logged in · Please run /login", "", "C:\\x\\claude.exe").Contains("로그인") ||
-            !FailureMessage(1, "", "Failed to authenticate: OAuth session expired and could not be refreshed", "claude").Contains("로그인") ||
-            !FailureMessage(1, "", "Error: overloaded\n", "claude").Contains("종료 코드 1).\nError: overloaded") ||
-            FailureMessage(2, new string('a', 900), "", "claude").Length > 460)
+        string login = FailureMessage(1, "Not logged in · Please run /login", "", "C:\\x\\claude.exe", "C:\\t\\claude-token.txt", false);
+        string expired = FailureMessage(1, "", "Failed to authenticate: OAuth session expired and could not be refreshed", "claude", "C:\\t\\claude-token.txt", true);
+        if (!login.Contains("로그인") || !login.Contains("\"C:\\x\\claude.exe\" setup-token") || !login.Contains("C:\\t\\claude-token.txt") ||
+            !expired.StartsWith("저장한 Claude 토큰") ||
+            !FailureMessage(1, "", "Error: overloaded\n", "claude", "t", false).Contains("종료 코드 1).\nError: overloaded") ||
+            FailureMessage(2, new string('a', 900), "", "claude", "t", false).Length > 460)
             throw new InvalidOperationException("Translation failure message selftest failed.");
         ProcessStartInfo exe = StartInfo("C:\\Tools\\claude.exe"), shim = StartInfo("C:\\Users\\a b\\AppData\\Roaming\\npm\\claude.cmd");
         if (exe.Arguments != ClaudeArguments || !exe.FileName.EndsWith("claude.exe") || !exe.RedirectStandardInput ||
             shim.Arguments != "/d /s /c \"\"C:\\Users\\a b\\AppData\\Roaming\\npm\\claude.cmd\" " + ClaudeArguments + "\"" ||
             exe.StandardOutputEncoding.CodePage != 65001)
             throw new InvalidOperationException("Translation command line selftest failed.");
+        string tokenFile = Path.Combine(Path.GetTempPath(), "ai-desktop-hotkeys-selftest-token.txt");
+        try
+        {
+            File.WriteAllText(tokenFile, "  sk-test- tok\r\nen \r\n");
+            string token = ReadToken(tokenFile);
+            ProcessStartInfo withToken = StartInfo("C:\\Tools\\claude.exe", token);
+            File.WriteAllText(tokenFile, " \r\n");
+            if (token != "sk-test-token" || withToken.EnvironmentVariables["CLAUDE_CODE_OAUTH_TOKEN"] != "sk-test-token" ||
+                ReadToken(tokenFile) != null || ReadToken(tokenFile + ".missing") != null ||
+                exe.EnvironmentVariables["CLAUDE_CODE_OAUTH_TOKEN"] != Environment.GetEnvironmentVariable("CLAUDE_CODE_OAUTH_TOKEN"))
+                throw new InvalidOperationException("Translation token selftest failed.");
+        }
+        finally { try { File.Delete(tokenFile); } catch { } }
         if (Normalize(" a\r\nb\rc \n") != "a\nb\nc" || !IsTerminal("WindowsTerminal", "") || !IsTerminal("", "ConsoleWindowClass") ||
             IsTerminal("chrome", "Chrome_WidgetWin_1") || IsTerminal("notepad", "Notepad"))
             throw new InvalidOperationException("Translation text or terminal selftest failed.");

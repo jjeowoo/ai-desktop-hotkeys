@@ -49,6 +49,13 @@ StrokesPlus.net 단축키로 ChatGPT Windows 앱과 Claude Desktop을 조작하�
 
 `claude`를 PATH, `%USERPROFILE%\.local\bin`, `%APPDATA%\npm` 순서로 찾고, 없으면 Claude 데스크톱 앱에 들어 있는 CLI(`%APPDATA%\Claude\claude-code\<버전>\…\claude.exe`)를 씁니다. 어느 것이든 **로그인된 상태**여야 합니다. 데스크톱 앱 안의 CLI는 앱 밖에서 실행하면 로그인되어 있지 않을 수 있습니다.
 
+CLI의 `/login` 로그인은 다른 프로그램이 먼저 갱신하면 풀릴 수 있습니다. 로그인이 자꾸 풀리면 1년짜리 토큰을 쓰세요. 구독 사용량에서 차감되는 것은 같고, 추가 요금은 없습니다.
+
+1. 터미널에서 `claude setup-token`을 실행합니다. 브라우저에서 승인하면 토큰이 출력됩니다.
+2. 출력된 토큰을 `%APPDATA%\ai-desktop-hotkeys\claude-token.txt`에 저장합니다. 이 파일이 있으면 번역할 때 그 토큰을 `CLAUDE_CODE_OAUTH_TOKEN`으로 넘기고, CLI 자체의 로그인은 쓰지 않습니다.
+
+토큰은 1년 동안 계정을 쓸 수 있는 열쇠이므로 다른 곳에 올리지 마세요. 만료되거나 취소되면 팝업이 같은 방법으로 다시 발급하라고 안내합니다.
+
 CLI가 없으면 PowerShell에서 설치한 뒤 `claude`를 한 번 실행해 `/login` 합니다.
 
 ```powershell

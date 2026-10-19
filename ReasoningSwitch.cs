@@ -32,7 +32,7 @@ internal static class ReasoningSwitch
     private static System.Windows.Rect chatInputWindowBounds = System.Windows.Rect.Empty;
     private static StringBuilder trace = new StringBuilder();
     private static Stopwatch operationTimer = Stopwatch.StartNew();
-    private const string BuildName = "40-token-wrap";
+    private const string BuildName = "41-status-wait";
     // Anchored: sidebar session titles may also contain the model name.
     private const string ClaudeModelPattern = @"^\s*(?:(?:Model|모델)\s*:?\s*(?:Claude\s+)?Opus\s+5\.5\b|(?:Claude\s+)?Opus\s+5\.5\s*$)";
     // Not ListItem: Claude's Chat tab exposes conversation text as list items.
@@ -1363,9 +1363,18 @@ internal static class ReasoningSwitch
         AutomationElement archived = ArchivedTab(root);
         if (archived == null)
         {
+            // Claude's element tree can still be filling in when the hotkey lands (one run saw
+            // 3 buttons where the next saw 120), so the button gets the same wait as the menu.
             AutomationElement menuButton = null;
-            foreach (AutomationElement button in Elements(root, ControlType.Button))
-                if (Regex.IsMatch(Name(button), @"^\s*(그룹화\s*및\s*정렬|group\s*(and|&)\s*sort)\s*$", RegexOptions.IgnoreCase)) { menuButton = button; break; }
+            Stopwatch buttonTimer = Stopwatch.StartNew();
+            int lookups = 0;
+            do
+            {
+                if (lookups++ > 0) Thread.Sleep(100);
+                foreach (AutomationElement button in Elements(root, ControlType.Button))
+                    if (Regex.IsMatch(Name(button), @"^\s*(그룹화\s*및\s*정렬|group\s*(and|&)\s*sort)\s*$", RegexOptions.IgnoreCase)) { menuButton = button; break; }
+            } while (menuButton == null && buttonTimer.ElapsedMilliseconds < 2000);
+            trace.AppendLine("Group and sort button " + (menuButton == null ? "missing" : "found") + " after " + lookups + " lookups, " + buttonTimer.ElapsedMilliseconds + " ms.");
             if (menuButton == null) throw new InvalidOperationException("The sidebar's Group and sort button was not found; open the Code tab sidebar.");
             object expand;
             if (!menuButton.TryGetCurrentPattern(ExpandCollapsePattern.Pattern, out expand))

@@ -47,7 +47,7 @@ StrokesPlus.net 단축키로 ChatGPT Windows 앱과 Claude Desktop을 조작하�
 
 ### Claude Code CLI 준비
 
-`claude`를 PATH, `%USERPROFILE%\.local\bin`, `%APPDATA%\npm` 순서로 찾고, 없으면 Claude 데스크톱 앱에 들어 있는 CLI(`%APPDATA%\Claude\claude-code\<버전>\…\claude.exe`)를 씁니다. 어느 것이든 **로그인된 상태**여야 합니다. 데스크톱 앱 안의 CLI는 앱 밖에서 실행하면 로그인되어 있지 않을 수 있습니다.
+`claude`를 PATH, `%USERPROFILE%\.local\bin`, `%APPDATA%\npm` 순서로 찾고, 없으면 Claude 데스크톱 앱에 들어 있는 CLI(`%APPDATA%\Claude\claude-code\<버전>\…\claude.exe`, 또는 앱 패키지 폴더 `%LOCALAPPDATA%\Packages\Claude_…\LocalCache\Roaming\Claude\claude-code\<버전>\…\claude.exe`) 중 가장 최근 것을 씁니다. 앱 밖에서는 앞의 경로가 앱 업데이트 뒤 비어 있을 수 있어 패키지 폴더도 찾습니다. 어느 것이든 **로그인된 상태**여야 합니다. 데스크톱 앱 안의 CLI는 앱 밖에서 실행하면 로그인되어 있지 않을 수 있습니다.
 
 CLI의 `/login` 로그인은 다른 프로그램이 먼저 갱신하면 풀릴 수 있습니다. 로그인이 자꾸 풀리면 1년짜리 토큰을 쓰세요. 구독 사용량에서 차감되는 것은 같고, 추가 요금은 없습니다.
 

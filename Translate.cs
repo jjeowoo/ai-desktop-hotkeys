@@ -227,18 +227,35 @@ internal static class SelectionTranslator
                 catch { }
         string newest = null;
         DateTime newestTime = DateTime.MinValue;
+        foreach (string bundled in BundledFolders(appData, Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData)))
+            try
+            {
+                if (Directory.Exists(bundled))
+                    foreach (string candidate in Directory.GetFiles(bundled, "claude.exe", SearchOption.AllDirectories))
+                    {
+                        DateTime written = File.GetLastWriteTimeUtc(candidate);
+                        if (written > newestTime) { newest = candidate; newestTime = written; }
+                    }
+            }
+            catch { }
+        return newest;
+    }
+
+    // The Claude app is an MSIX package: %APPDATA%\Claude is its virtual view, seen only inside
+    // the app, and an app update can leave nothing there for other processes. The files are in
+    // the package's own folder, which every process sees.
+    internal static List<string> BundledFolders(string appData, string localAppData)
+    {
+        List<string> folders = new List<string> { Path.Combine(appData, "Claude\\claude-code") };
         try
         {
-            string bundled = Path.Combine(appData, "Claude\\claude-code");
-            if (Directory.Exists(bundled))
-                foreach (string candidate in Directory.GetFiles(bundled, "claude.exe", SearchOption.AllDirectories))
-                {
-                    DateTime written = File.GetLastWriteTimeUtc(candidate);
-                    if (written > newestTime) { newest = candidate; newestTime = written; }
-                }
+            string packages = Path.Combine(localAppData, "Packages");
+            if (Directory.Exists(packages))
+                foreach (string package in Directory.GetDirectories(packages, "Claude_*"))
+                    folders.Add(Path.Combine(package, "LocalCache\\Roaming\\Claude\\claude-code"));
         }
         catch { }
-        return newest;
+        return folders;
     }
 
     // A long-lived token from `claude setup-token`, kept apart from the CLI's own login: that login's
@@ -394,6 +411,18 @@ internal static class SelectionTranslator
             shim.Arguments != "/d /s /c \"\"C:\\Users\\a b\\AppData\\Roaming\\npm\\claude.cmd\" " + ClaudeArguments + "\"" ||
             exe.StandardOutputEncoding.CodePage != 65001)
             throw new InvalidOperationException("Translation command line selftest failed.");
+        string fakeLocal = Path.Combine(Path.GetTempPath(), "ai-desktop-hotkeys-selftest-local");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(fakeLocal, "Packages\\Claude_pzs8sxrjxfjjc"));
+            Directory.CreateDirectory(Path.Combine(fakeLocal, "Packages\\Other_app"));
+            List<string> bundled = BundledFolders("C:\\Roaming", fakeLocal);
+            if (bundled.Count != 2 || bundled[0] != "C:\\Roaming\\Claude\\claude-code" ||
+                bundled[1] != Path.Combine(fakeLocal, "Packages\\Claude_pzs8sxrjxfjjc\\LocalCache\\Roaming\\Claude\\claude-code") ||
+                BundledFolders("C:\\Roaming", fakeLocal + ".missing").Count != 1)
+                throw new InvalidOperationException("Translation CLI folder selftest failed.");
+        }
+        finally { try { Directory.Delete(fakeLocal, true); } catch { } }
         string tokenFile = Path.Combine(Path.GetTempPath(), "ai-desktop-hotkeys-selftest-token.txt");
         try
         {

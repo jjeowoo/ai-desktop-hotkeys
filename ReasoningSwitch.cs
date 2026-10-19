@@ -23,6 +23,7 @@ internal static class ReasoningSwitch
     [DllImport("user32.dll")] private static extern bool GetCursorPos(out System.Drawing.Point point);
     [DllImport("user32.dll")] private static extern void mouse_event(uint flags, uint dx, uint dy, uint data, UIntPtr extraInfo);
     [DllImport("user32.dll")] private static extern bool SetForegroundWindow(IntPtr hwnd);
+    [DllImport("user32.dll")] private static extern bool AllowSetForegroundWindow(uint processId);
     [DllImport("user32.dll")] private static extern void keybd_event(byte key, byte scan, uint flags, UIntPtr extraInfo);
     private static IntPtr targetWindow;
     private static string app = "";
@@ -32,7 +33,7 @@ internal static class ReasoningSwitch
     private static System.Windows.Rect chatInputWindowBounds = System.Windows.Rect.Empty;
     private static StringBuilder trace = new StringBuilder();
     private static Stopwatch operationTimer = Stopwatch.StartNew();
-    private const string BuildName = "42-cli-package-path";
+    private const string BuildName = "43-ime-refresh-rights";
     // Anchored: sidebar session titles may also contain the model name.
     private const string ClaudeModelPattern = @"^\s*(?:(?:Model|모델)\s*:?\s*(?:Claude\s+)?Opus\s+5\.5\b|(?:Claude\s+)?Opus\s+5\.5\s*$)";
     // Not ListItem: Claude's Chat tab exposes conversation text as list items.
@@ -121,7 +122,12 @@ internal static class ReasoningSwitch
                         // Held keys must wait for the renewed IME link, so wait for the refresh.
                         using (Process refresh = Process.Start(new ProcessStartInfo(Process.GetCurrentProcess().MainModule.FileName,
                             "--refresh-ime " + targetWindow.ToInt64() + " 0") { UseShellExecute = false, CreateNoWindow = true }))
+                        {
+                            // This run came from the hotkey, so it may hand its right to take the
+                            // foreground on; without it the refresh must fake an input event.
+                            AllowSetForegroundWindow((uint)refresh.Id);
                             refresh.WaitForExit(2000);
+                        }
                     }
                     catch { }
                 gate.ReleaseMutex();
@@ -175,10 +181,11 @@ internal static class ReasoningSwitch
             plain = SetForegroundWindow(bounce.Handle) && GetForegroundWindow() == bounce.Handle;
             if (!plain)
             {
-                // A background process may not take the foreground; an input event of its own allows it.
-                keybd_event(0x12, 0, 0, TypeAhead.OwnKey);
+                // A background process may not take the foreground; an input event of its own allows
+                // it. A whole Shift tap, sent before the switch: an Alt pressed in Claude and released
+                // in the hidden window left Claude eating the next key (2026-10-19).
+                TapShift();
                 SetForegroundWindow(bounce.Handle);
-                keybd_event(0x12, 0, 2, TypeAhead.OwnKey);
             }
             System.Windows.Forms.Application.DoEvents();
             own = GetForegroundWindow() == bounce.Handle;
@@ -188,15 +195,20 @@ internal static class ReasoningSwitch
             if (!back && own)
             {
                 // Windows can refuse the way back too; never leave the hidden window in front.
-                keybd_event(0x12, 0, 0, TypeAhead.OwnKey);
+                TapShift();
                 SetForegroundWindow(targetWindow);
-                keybd_event(0x12, 0, 2, TypeAhead.OwnKey);
                 System.Windows.Forms.Application.DoEvents();
                 back = GetForegroundWindow() == targetWindow;
                 if (back) retried = true;
             }
         }
         return "IME refresh: plain switch=" + plain + ", own window in front=" + own + ", back=" + back + (retried ? " (second try)" : "");
+    }
+    // Shift alone types nothing, opens no menu and does not switch Hangul.
+    private static void TapShift()
+    {
+        keybd_event(0x10, 0, 0, TypeAhead.OwnKey);
+        keybd_event(0x10, 0, 2, TypeAhead.OwnKey);
     }
     private static bool IsDown(int key) { return (GetAsyncKeyState(key) & 0x8000) != 0; }
     private static bool InputHeld()

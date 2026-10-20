@@ -50,6 +50,14 @@ for ($index = 0; $index -lt $oldRecords.Count; $index++) {
         throw "An existing hotkey changed: $($oldRecord.Description)"
     }
 }
+# Opened by Explorer, StrokesPlus belongs to no terminal or app that ran this installer: started as
+# their child it closed with them (the Claude app's restart took it down on 2026-10-20). WMI's
+# Win32_Process.Create failed from inside the Claude app, so Explorer opens it instead.
+function Start-Detached([string]$path) {
+    Start-Process -FilePath (Join-Path $env:WINDIR 'explorer.exe') -ArgumentList ('"' + $path + '"')
+    for ($i = 0; $i -lt 40 -and -not (Get-Process -Name 'StrokesPlus.net' -ErrorAction SilentlyContinue); $i++) { Start-Sleep -Milliseconds 250 }
+    if (-not (Get-Process -Name 'StrokesPlus.net' -ErrorAction SilentlyContinue)) { Start-Process -FilePath $path -WindowStyle Hidden }
+}
 $strokesProcesses = @(Get-Process -Name 'StrokesPlus.net' -ErrorAction SilentlyContinue)
 if ($strokesProcesses.Count -gt 1) { throw 'Multiple StrokesPlus processes are running; configuration was not changed.' }
 if ($DryRun) {
@@ -72,10 +80,10 @@ try {
     if ([IO.File]::ReadAllText($configPath) -cne $originalJson) { throw 'Settings changed while stopping StrokesPlus; configuration was not replaced.' }
     [IO.File]::WriteAllText($configPath, $updatedJson, [Text.UTF8Encoding]::new($false))
     $written = $true
-    if ($stopped -or -not $Undo) { Start-Process -FilePath $programPath -WindowStyle Hidden }
+    if ($stopped -or -not $Undo) { Start-Detached $programPath }
     [pscustomobject]@{Installed=(-not $Undo);Removed=[bool]$Undo;HotkeyCount=$check.Hotkeys.Count;Backup=$backupPath;Started=($stopped -or -not $Undo)} | ConvertTo-Json
 } catch {
     if ($written) { [IO.File]::WriteAllText($configPath, $originalJson, [Text.UTF8Encoding]::new($false)) }
-    if ($stopped -and -not (Get-Process -Name 'StrokesPlus.net' -ErrorAction SilentlyContinue)) { Start-Process -FilePath $programPath -WindowStyle Hidden }
+    if ($stopped -and -not (Get-Process -Name 'StrokesPlus.net' -ErrorAction SilentlyContinue)) { Start-Detached $programPath }
     throw
 }

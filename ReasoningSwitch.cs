@@ -33,7 +33,7 @@ internal static class ReasoningSwitch
     private static System.Windows.Rect chatInputWindowBounds = System.Windows.Rect.Empty;
     private static StringBuilder trace = new StringBuilder();
     private static Stopwatch operationTimer = Stopwatch.StartNew();
-    private const string BuildName = "43-ime-refresh-rights";
+    private const string BuildName = "45-backtick-light";
     // Anchored: sidebar session titles may also contain the model name.
     private const string ClaudeModelPattern = @"^\s*(?:(?:Model|모델)\s*:?\s*(?:Claude\s+)?Opus\s+5\.5\b|(?:Claude\s+)?Opus\s+5\.5\s*$)";
     // Not ListItem: Claude's Chat tab exposes conversation text as list items.
@@ -42,8 +42,7 @@ internal static class ReasoningSwitch
         ControlType.CheckBox, ControlType.Button
     };
 
-    [STAThread]
-    private static int Main(string[] args)
+    internal static int Run(string[] args)
     {
         if (args.Length == 1 && args[0] == "--selftest")
         {
@@ -1977,6 +1976,7 @@ internal static class ReasoningSwitch
     {
         StrokesImageSearch.SelfTest();
         SelectionTranslator.SelfTest();
+        BacktickClick.SelfTest();
         GptFocusSelfTest();
         ForegroundSelfTest();
         // Protect the final click from search fields, off-window edits and popup overlap.

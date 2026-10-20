@@ -15,7 +15,7 @@ if ($Undo) {
     if (-not (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'ReasoningSwitch.exe'))) { throw 'ReasoningSwitch.exe is missing.' }
     # Windows PowerShell 5.1 returns the JSON array as one object; enumerate it explicitly.
     $records = @((Get-Content -LiteralPath (Join-Path $PSScriptRoot 'Hotkeys.json') -Raw | ConvertFrom-Json) | ForEach-Object { $_ })
-    if ($records.Count -ne 7) { throw 'Expected exactly seven hotkey records.' }
+    if ($records.Count -ne 8) { throw 'Expected exactly eight hotkey records.' }
     $nextId = [int](($oldRecords | Measure-Object HotkeyID -Maximum).Maximum) + 1
     $helperPath = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot 'ReasoningSwitch.exe'))
     $helperLiteral = $helperPath | ConvertTo-Json -Compress
@@ -25,7 +25,8 @@ if ($Undo) {
         $pattern = '(?m)^var reasoningHelper = [^\r\n]*;\r?$'
         if ([regex]::Matches($record.Script, $pattern).Count -ne 1) { throw 'Expected one helper path declaration in each hotkey.' }
         $record.Script = [regex]::Replace($record.Script, $pattern, [Text.RegularExpressions.MatchEvaluator]{param($match) 'var reasoningHelper = ' + $helperLiteral + ';'})
-        $collision = @($oldRecords | Where-Object { $_.Active -and $_.Key -eq $record.Key -and $_.Control -and $_.Alt -and -not $_.Shift -and -not $_.Win })
+        $collision = @($oldRecords | Where-Object { $_.Active -and $_.Key -eq $record.Key -and [bool]$_.Control -eq [bool]$record.Control -and
+            [bool]$_.Alt -eq [bool]$record.Alt -and [bool]$_.Shift -eq [bool]$record.Shift -and [bool]$_.Win -eq [bool]$record.Win })
         if ($collision.Count) { throw "A requested hotkey is already assigned: $($collision[0].Description)" }
         $record.HotkeyID = $nextId
         $nextId++
